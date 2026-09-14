@@ -13,11 +13,63 @@ from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 import json
+import logging
+
 import httpx
+from utils import weread_client
 from utils.auth_manager import auth_manager
 from utils.wechat_status import is_login_expired, is_invalid_fakeid, LOGIN_EXPIRED_MSG
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+async def _articles_via_weread(fakeid: str, begin: int, count: int,
+                               keyword: Optional[str] = None) -> Optional[Dict]:
+    """用微信读书通道取文章列表，失败返回 None（由调用方回落到后台的错误提示）。
+
+    微信读书没有「号内搜索」接口，带 keyword 时只能对拉回来的列表做标题/摘要过滤，
+    因此召回范围受 WEREAD_MAX_PAGES 限制，不等同于后台的全量搜索。
+    """
+    try:
+        async with weread_client.WereadClient() as client:
+            articles = await client.list_articles(fakeid, limit=begin + count, offset=0)
+    except weread_client.WereadError as e:
+        logger.warning("[WeRead] 文章列表获取失败 %s: %s", fakeid[:8], e.message)
+        return None
+
+    if keyword:
+        needle = keyword.lower()
+        articles = [
+            a for a in articles
+            if needle in (a.get("title", "") or "").lower()
+            or needle in (a.get("digest", "") or "").lower()
+        ]
+
+    page = articles[begin:begin + count]
+    return {
+        "articles": [
+            {
+                "aid": a.get("aid", ""),
+                "title": a.get("title", ""),
+                "link": a.get("link", ""),
+                "update_time": a.get("update_time", 0),
+                "create_time": a.get("create_time", 0),
+                "digest": a.get("digest", ""),
+                "cover": a.get("cover", ""),
+                "author": a.get("author", ""),
+            }
+            for a in page
+        ],
+        # total 是本通道已拉回的条数，不是公众号历史总数：微信读书列表接口不给总数，
+        # 翻页深度受 WEREAD_MAX_PAGES 限制。source 字段供调用方区分这一点。
+        "total": len(articles),
+        "begin": begin,
+        "count": len(page),
+        "keyword": keyword,
+        "source": "weread",
+    }
 
 
 class ArticleItem(BaseModel):
@@ -60,27 +112,43 @@ async def get_articles(
     - **count** (可选): 获取数量，默认 10，最大 100
     - **keyword** (可选): 在该公众号内搜索关键词
     """
+    creds = auth_manager.get_credentials()
+    source = weread_client.article_source()
+    has_mp = bool(creds and isinstance(creds, dict)
+                  and creds.get("token") and creds.get("cookie"))
+    use_mp = has_mp and source != "weread"
+    use_weread = weread_client.is_enabled() and source != "mp"
+
+    async def _fallback(mp_error: str) -> ArticlesResponse:
+        """后台不可用时改走微信读书；读书也不行就把后台的错误原样返回。"""
+        if not use_weread:
+            return ArticlesResponse(success=False, error=mp_error)
+        data = await _articles_via_weread(fakeid, begin, count, keyword)
+        if data is None:
+            return ArticlesResponse(success=False, error=f"{mp_error}（微信读书通道也失败）")
+        logger.info("[WeRead] 公众号后台不可用，已改用微信读书通道: fakeid=%s", fakeid[:8])
+        return ArticlesResponse(success=True, data=data)
+
+    if not use_mp:
+        if not use_weread:
+            raise HTTPException(
+                status_code=401,
+                detail="未登录或登录信息不完整，请重新登录，或配置微信读书 Cookie"
+            )
+        data = await _articles_via_weread(fakeid, begin, count, keyword)
+        if data is None:
+            return ArticlesResponse(
+                success=False,
+                error="微信读书通道获取文章列表失败，请检查微信读书 Cookie 是否有效"
+            )
+        return ArticlesResponse(success=True, data=data)
+
     try:
         print(f"[INFO] get article list: fakeid={fakeid[:8]}...")
-        
-        # 获取认证信息（用于请求微信API）
-        creds = auth_manager.get_credentials()
-        
-        if not creds or not isinstance(creds, dict):
-            raise HTTPException(
-                status_code=401,
-                detail="未登录或认证信息格式错误"
-            )
-        
+
         token = creds.get("token", "")
         cookie = creds.get("cookie", "")
-        
-        if not token or not cookie:
-            raise HTTPException(
-                status_code=401,
-                detail="登录信息不完整，请重新登录"
-            )
-        
+
         # 构建请求参数
         is_searching = bool(keyword)
         params = {
@@ -122,23 +190,17 @@ async def get_articles(
 
             # 检查是否需要重新登录（统一用 wechat_status 判断）
             if is_login_expired(ret_code, error_msg):
-                return ArticlesResponse(
-                    success=False,
-                    error=LOGIN_EXPIRED_MSG
-                )
+                return await _fallback(LOGIN_EXPIRED_MSG)
 
             # [2026-05-18] 同步 SaaS 修复：ret=200002 + "invalid args" → fakeid 已失效
             # 给用户清晰提示而非通用错误
             if is_invalid_fakeid(ret_code, error_msg):
-                return ArticlesResponse(
-                    success=False,
-                    error="该公众号在微信侧已无法访问（可能已注销/改名/重新注册），请重新搜索最新的同名公众号"
+                return await _fallback(
+                    "该公众号在微信侧已无法访问（可能已注销/改名/重新注册），"
+                    "请重新搜索最新的同名公众号"
                 )
 
-            return ArticlesResponse(
-                success=False,
-                error=f"获取文章列表失败: ret={ret_code}, msg={error_msg}"
-            )
+            return await _fallback(f"获取文章列表失败: ret={ret_code}, msg={error_msg}")
         
         # 解析文章列表
         publish_page = result.get("publish_page", {})
@@ -201,16 +263,10 @@ async def get_articles(
         
     except httpx.HTTPStatusError as e:
         print(f"[ERROR] HTTP error: {e.response.status_code}")
-        return ArticlesResponse(
-            success=False,
-            error=f"请求失败: HTTP {e.response.status_code}"
-        )
+        return await _fallback(f"请求失败: HTTP {e.response.status_code}")
     except httpx.RequestError as e:
         print(f"[ERROR] request error: {e}")
-        return ArticlesResponse(
-            success=False,
-            error=f"网络请求失败: {str(e)}"
-        )
+        return await _fallback(f"网络请求失败: {str(e)}")
     except Exception as e:
         import traceback
         print(f"[ERROR] unknown error: {e}")

@@ -306,6 +306,55 @@
             grid-column: 1 / -1;
         }
 
+        /* WeRead Section */
+        .weread-section {
+            grid-column: 1 / -1;
+        }
+
+        .weread-status {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--space-sm) var(--space-md);
+            margin-bottom: var(--space-md);
+            font-size: var(--font-xs);
+            color: var(--text-secondary);
+        }
+
+        .weread-status .pill {
+            padding: 2px 10px;
+            border-radius: 999px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-light);
+        }
+
+        .weread-status .pill.on { color: var(--success-color); border-color: rgba(82, 196, 26, 0.3); }
+        .weread-status .pill.off { color: var(--text-muted); }
+
+        .weread-actions {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: var(--space-sm);
+            margin-top: var(--space-sm);
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border-base);
+            padding: 6px 16px;
+        }
+
+        .btn-ghost:hover {
+            color: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+
+        .weread-hint {
+            font-size: var(--font-xs);
+            color: var(--text-muted);
+        }
+
         .test-input-group {
             display: flex;
             gap: var(--space-sm);
@@ -592,6 +641,38 @@
                 </ul>
             </div>
 
+            <!-- WeRead channel -->
+            <div class="card weread-section">
+                <div class="card-header">
+                    <div class="card-icon green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="card-title">微信读书备用通道</div>
+                        <div class="card-desc">公众号后台凭证过期 / 触发风控时，自动改走微信读书继续采集</div>
+                    </div>
+                </div>
+                <div class="weread-status" id="wereadStatus">检查中...</div>
+                <div class="test-input-group">
+                    <input type="password" id="wereadCookie" placeholder="wr_vid=...; wr_skey=...; wr_rt=...">
+                    <button class="btn btn-primary" id="wereadSaveBtn" onclick="saveWereadCookie()">保存</button>
+                </div>
+                <div class="weread-actions">
+                    <button class="btn btn-ghost" onclick="verifyWereadCookie()">校验</button>
+                    <button class="btn btn-ghost" onclick="clearWereadCookie()">清除</button>
+                    <span class="weread-hint">浏览器登录 weread.qq.com → F12 → Network → 复制请求头里的完整 Cookie</span>
+                </div>
+                <div class="result-panel" id="wereadResult">
+                    <div class="result-header">
+                        <span class="tag" id="wereadTag"></span>
+                    </div>
+                    <div class="result-body" id="wereadBody"></div>
+                </div>
+            </div>
+
             <!-- Test -->
             <div class="card test-section">
                 <div class="card-header">
@@ -782,11 +863,108 @@
             btn.textContent = '获取文章';
         }
 
+        function wereadFeedback(ok, message) {
+            var panel = document.getElementById('wereadResult');
+            var tag = document.getElementById('wereadTag');
+            var body = document.getElementById('wereadBody');
+            panel.className = 'result-panel visible';
+            tag.className = ok ? 'tag success' : 'tag error';
+            tag.textContent = ok ? '成功' : '失败';
+            body.textContent = message;
+        }
+
+        async function loadWereadStatus() {
+            var el = document.getElementById('wereadStatus');
+            try {
+                var res = await fetch('/api/weread/status');
+                var data = await res.json();
+                if (!data.success) {
+                    el.textContent = '状态获取失败: ' + (data.error || '未知错误');
+                    return;
+                }
+                var d = data.data;
+                var pills = [
+                    ['Cookie', d.configured ? '已配置' : '未配置', d.configured],
+                    ['通道', d.enabled ? '已启用' : '未启用', d.enabled],
+                    ['取数策略', d.article_source, true],
+                    ['自动加入书架', d.auto_add_to_shelf ? '是' : '否', d.auto_add_to_shelf]
+                ];
+                if (d.vid) pills.push(['wr_vid', d.vid, true]);
+                if (d.env_managed) pills.push(['来源', 'WEREAD_COOKIE 环境变量（管理页写入不生效）', true]);
+
+                el.innerHTML = '';
+                pills.forEach(function (p) {
+                    el.innerHTML += '<span class="pill ' + (p[2] ? 'on' : 'off') + '">' + p[0] + '：' + p[1] + '</span>';
+                });
+            } catch (e) {
+                el.textContent = '状态获取失败: ' + e.message;
+            }
+        }
+
+        async function saveWereadCookie() {
+            var input = document.getElementById('wereadCookie');
+            var btn = document.getElementById('wereadSaveBtn');
+            var cookie = input.value.trim();
+            if (!cookie) return;
+
+            btn.disabled = true;
+            btn.textContent = '保存中...';
+            try {
+                var res = await fetch('/api/weread/cookie', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cookie: cookie })
+                });
+                var data = await res.json();
+                if (data.success) {
+                    input.value = '';
+                    var d = data.data || {};
+                    wereadFeedback(true, d.message + '\n校验结果: ' + (d.verified ? '有效' : (d.verify_message || '未通过')));
+                } else {
+                    wereadFeedback(false, data.error || '保存失败');
+                }
+            } catch (e) {
+                wereadFeedback(false, '请求失败: ' + e.message);
+            }
+            btn.disabled = false;
+            btn.textContent = '保存';
+            loadWereadStatus();
+        }
+
+        async function verifyWereadCookie() {
+            try {
+                var res = await fetch('/api/weread/verify', { method: 'POST' });
+                var data = await res.json();
+                wereadFeedback(data.success, data.success ? (data.data || {}).message : (data.error || '校验失败'));
+            } catch (e) {
+                wereadFeedback(false, '请求失败: ' + e.message);
+            }
+        }
+
+        async function clearWereadCookie() {
+            if (!confirm('确定清除已保存的微信读书 Cookie？清除后后台失效时将无法自动兜底。')) return;
+            try {
+                var res = await fetch('/api/weread/cookie', { method: 'DELETE' });
+                var data = await res.json();
+                wereadFeedback(data.success, data.success ? '已清除' : (data.error || '清除失败'));
+            } catch (e) {
+                wereadFeedback(false, '请求失败: ' + e.message);
+            }
+            loadWereadStatus();
+        }
+
         document.getElementById('testUrl').addEventListener('keydown', function (e) {
             if (e.key === 'Enter') testArticle();
         });
 
-        window.addEventListener('load', checkStatus);
+        document.getElementById('wereadCookie').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') saveWereadCookie();
+        });
+
+        window.addEventListener('load', function () {
+            checkStatus();
+            loadWereadStatus();
+        });
     </script>
 </body>
 </html>

@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
 # 导入路由
-from routes import article, articles, search, admin, login, image, health, stats, rss, account, feed, export
+from routes import article, articles, search, admin, login, image, health, stats, rss, account, feed, export, weread
 from utils.rss_store import init_db
 from utils.rss_poller import rss_poller
 
@@ -42,6 +42,13 @@ API_DESCRIPTION = """
 ## 认证说明
 
 所有核心接口都需要先登录。登录后凭证自动保存到 `.env` 文件，服务重启后无需重新登录（有效期约 4 天）。
+
+## 微信读书备用通道
+
+公众号后台凭证约 4 天过期，且 appmsgpublish 有频率风控、正文直抓会触发验证码。
+配置微信读书 Cookie（`POST /api/weread/cookie` 或 `WEREAD_COOKIE` 环境变量）后，
+后台不可用时文章列表与正文会自动改走 weread.qq.com，采集不中断。
+取数策略由 `ARTICLE_SOURCE` 控制：`auto`（默认，后台优先）/ `mp` / `weread`。
 """
 
 
@@ -149,6 +156,7 @@ app.include_router(image.router, prefix="/api", tags=["图片代理"])
 app.include_router(rss.router, prefix="/api", tags=["RSS 订阅"])
 app.include_router(feed.router, prefix="/api", tags=["Feed（文章列表 / markdown 导出）"])
 app.include_router(export.router, prefix="/api", tags=["文章导出（整号 md/html/pdf/docx/epub/xlsx/json）"])
+app.include_router(weread.router, prefix="/api", tags=["微信读书通道（后台失效时的备用采集源）"])
 
 # ---------- MCP server（单机版 AI 客户端入口；ENABLE_MCP + MCP_TOKEN 静态 Bearer 鉴权） ----------
 # 让 Claude/Codex/Cline 等 AI 客户端直接搜索/订阅/读你的公众号文章。

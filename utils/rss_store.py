@@ -177,6 +177,20 @@ def list_subscriptions() -> List[Dict]:
         conn.close()
 
 
+def get_nickname_map() -> Dict[str, str]:
+    """fakeid → nickname 的轻量映射。
+
+    轮询器每轮要给每个号取昵称（日志/书架提示用）。走 list_subscriptions 会带上
+    每个号的文章数统计（相关子查询），订阅多了明显变慢；这里只读两列。
+    """
+    conn = _get_conn()
+    try:
+        rows = conn.execute("SELECT fakeid, nickname FROM subscriptions").fetchall()
+        return {r["fakeid"]: (r["nickname"] or "") for r in rows}
+    finally:
+        conn.close()
+
+
 def get_subscription(fakeid: str) -> Optional[Dict]:
     conn = _get_conn()
     try:
@@ -385,6 +399,35 @@ def get_article_by_id(article_id: int) -> Optional[Dict]:
     try:
         row = conn.execute(
             "SELECT * FROM articles WHERE id=?", (article_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_article_by_link(link: str) -> Optional[Dict]:
+    """按原文链接取单篇文章。
+
+    先精确匹配；不中再用短链 token 前缀匹配 —— 入库链接可能带 chksm/scene 等
+    查询参数，而调用方给的往往是干净的 https://mp.weixin.qq.com/s/<token>。
+    """
+    value = (link or "").strip()
+    if not value:
+        return None
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT * FROM articles WHERE link=?", (value,)).fetchone()
+        if row:
+            return dict(row)
+        base = value.split("?", 1)[0].split("#", 1)[0]
+        if not base:
+            return None
+        # 短链 token 里合法含 '_'，而 '_' 是 LIKE 的单字符通配符 —— 不转义会串到别的文章
+        escaped = base.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        row = conn.execute(
+            "SELECT * FROM articles WHERE link=? OR link LIKE ? ESCAPE '\\' "
+            "ORDER BY publish_time DESC LIMIT 1",
+            (base, escaped + "?%"),
         ).fetchone()
         return dict(row) if row else None
     finally:

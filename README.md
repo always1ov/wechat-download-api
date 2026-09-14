@@ -24,6 +24,7 @@
 - **MCP · AI 客户端接入** — 内置 MCP 服务，Claude / Codex / Cline / Cursor 等 AI 客户端可**直接搜索、订阅、读文章**（6 个工具，静态 Token 鉴权，单用户自托管无需 OAuth）
 - **文章内容获取** — 通过 URL 获取文章完整内容（标题、作者、正文 HTML / 纯文本、图片列表）
 - **多格式导出** — 单篇 markdown 增量同步（带 YAML frontmatter，导入 Obsidian / Logseq）；整号文章一键打包成 **Markdown / HTML / Word / PDF / EPUB / Excel / JSON** 7 种格式（Word/PDF/EPUB 图片内嵌离线可看），纯读本地库、不触发抓取
+- **微信读书备用通道** — 公众号后台凭证过期 / 触发频率风控 / 正文抓取遇验证码时，自动改走 [weread.qq.com](https://weread.qq.com) 取文章列表和正文，采集不中断（见 [微信读书备用通道](#微信读书备用通道)）
 - **反风控体系** — Chrome TLS 指纹模拟 + SOCKS5 代理池轮转 + 三层自动限频，有效对抗微信封控
 - **文章列表 & 搜索** — 获取任意公众号历史文章列表，支持分页和关键词搜索
 - **公众号搜索** — 按名称搜索公众号，获取 FakeID
@@ -114,6 +115,80 @@ docker run -d \
 登录后即可通过 API 获取**任意公众号**的公开文章（不限于自己的公众号）。
 
 > **本地电脑可以直接使用！** 不需要公网服务器——在本地启动服务后通过 `localhost` 访问即可完成扫码登录和全部功能。只有当你需要从其他设备（如手机 RSS 阅读器）远程访问时，才需要公网服务器或内网穿透。
+
+---
+
+## 微信读书备用通道
+
+公众号后台这条路有三个绕不开的坑：**凭证约 4 天过期**、`appmsgpublish` **有频率风控**、正文页直抓**会触发验证码**。任意一个踩中，轮询器和文章接口就会静默失联——表现就是「RSS 不更新了」「文章拿不到正文」。
+
+[微信读书](https://weread.qq.com) Web 端能读到同样的公众号文章，而且用的是**另一套登录态**（`wr_skey` / `wr_vid` / `wr_rt`），不共享公众号后台的风控额度。配好它之后，后台不可用时会自动切过去，采集不中断。
+
+> 方案来源：[rachelos/we-mp-rss#442](https://github.com/rachelos/we-mp-rss/issues/442)
+
+### 配置
+
+**第一步：拿到微信读书 Cookie**
+
+1. 浏览器登录 <https://weread.qq.com>
+2. 按 `F12` 打开开发者工具 → `Network` 面板 → 刷新页面，点开任意一个请求
+3. 在 `Request Headers` 里复制完整的 `Cookie`（需要包含 `wr_skey` / `wr_vid` / `wr_rt`）
+
+**第二步：填进去**（二选一）
+
+```bash
+# 方式一：环境变量（优先级最高）
+# .env
+WEREAD_COOKIE=wr_vid=...; wr_skey=...; wr_rt=...
+
+# 方式二：接口写入，存到 data/.weread.json，不用重启
+curl -X POST http://localhost:5000/api/weread/cookie \
+  -H "Content-Type: application/json" \
+  -d '{"cookie": "wr_vid=...; wr_skey=...; wr_rt=..."}'
+```
+
+配好后查一下状态：
+
+```bash
+curl http://localhost:5000/api/weread/status
+# {"success":true,"data":{"configured":true,"enabled":true,"article_source":"auto",...}}
+```
+
+### 生效方式
+
+默认 `ARTICLE_SOURCE=auto`，**公众号后台优先**，只有后台明确出错才回退，不会平白多打微信读书：
+
+| 场景 | 行为 |
+|------|------|
+| RSS 轮询时后台报登录过期 / 频率风控 | 文章列表自动改走微信读书 |
+| 后台完全没登录 | 整轮轮询全部走微信读书 |
+| 正文直抓命中验证码 / 风控页 | 用微信读书正文接口补齐该篇正文 |
+| 后台报 `invalid args`（号已注销/改名） | 先问微信读书；读书也拿不到才拉黑该号 |
+| 后台一切正常 | 照常走后台，微信读书不发请求 |
+
+想钉死某一条通道，把 `ARTICLE_SOURCE` 设成 `mp`（只用后台）或 `weread`（只用微信读书）。
+
+> **关于书架**：微信读书只对**书架上**的公众号返回文章列表，所以采集前会自动把公众号加入书架（相当于在微信读书里关注它）。不想改动自己的书架就设 `WEREAD_AUTO_ADD_SHELF=false`，然后手动在微信读书 App 里关注这些号。
+
+### 接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/weread/status` | 通道状态（是否已配置 / 是否启用 / 取数策略），不回传完整 Cookie |
+| `POST` | `/api/weread/cookie` | 配置 Cookie，保存后立刻校验一次 |
+| `DELETE` | `/api/weread/cookie` | 清除已保存的 Cookie |
+| `POST` | `/api/weread/verify` | 校验当前 Cookie 是否还有效 |
+| `POST` | `/api/weread/shelf` | 手动把公众号加入微信读书书架 |
+| `GET` | `/api/weread/articles?fakeid=xxx` | 直连微信读书取文章列表（完全不经过后台） |
+| `GET` | `/api/weread/content?review_id=xxx` | 直连微信读书取正文，也可传 `url` + `fakeid` |
+
+### 已知限制
+
+- **Cookie 也会过期**：过期后接口返回 `-2012` / `-2041`，重新复制一次即可。两条通道的凭证互不相关，同时配上才是真的双保险。
+- **拿不到「号内搜索」**：微信读书没有对应接口，`/api/public/articles` 带 `keyword` 回退到微信读书时，只能对已拉回的列表做标题/摘要过滤，召回范围受 `WEREAD_MAX_PAGES` 限制。
+- **正文接口限流较严**：`WEREAD_CONTENT_INTERVAL` 建议保持 ≥ 2 秒。
+- **只认短链**：`reviewId` 由 `bookId` + 文章短链 token 拼成，所以 `/api/article` 走微信读书兜底时只支持 `https://mp.weixin.qq.com/s/<token>` 形式的链接；长链（`/s?__biz=...`）没有 token，推不出 `reviewId`。
+- **列表接口偶发不可用**：微信读书曾一度停掉 `/web/mp/articles`。遇到这种情况会自动退到 `/api/mp/cover`，但那个接口一次只返回**最新一篇**，补不了历史。
 
 ---
 
@@ -578,6 +653,7 @@ curl -OJ "http://localhost:5000/api/export/account/MzA1MjM1ODk2MA==.epub?since=$
 | `POST` | `/api/login/bizlogin` | 完成登录 |
 | `GET` | `/api/login/info` | 获取登录信息 |
 | `GET` | `/api/admin/status` | 查询登录状态 |
+| `GET` | `/api/weread/status` | 微信读书通道状态（详见 [微信读书备用通道](#微信读书备用通道)） |
 | `POST` | `/api/admin/logout` | 退出登录 |
 
 完整的接口文档请访问 http://localhost:5000/api/docs
@@ -607,6 +683,13 @@ cp env.example .env
 | `ARTICLES_PER_POLL` | 每次轮询每个公众号拉取的文章批次数 | 10 |
 | `RSS_FETCH_FULL_CONTENT` | RSS 是否获取完整内容（true/false） | true |
 | `PROXY_URLS` | **SOCKS5 代理池地址（强烈建议配置，避免账号风控）** | 空 |
+| `WEREAD_COOKIE` | **微信读书 Cookie（后台失效时的备用通道，强烈建议配置）** | 空 |
+| `ARTICLE_SOURCE` | 取数策略：`auto` / `mp` / `weread` | auto |
+| `WEREAD_ENABLED` | 强制开关微信读书通道（留空=配了 Cookie 就启用） | 空 |
+| `WEREAD_AUTO_ADD_SHELF` | 采集前自动把公众号加入微信读书书架 | true |
+| `WEREAD_CONTENT_INTERVAL` | 微信读书正文请求最小间隔（秒） | 2 |
+| `WEREAD_PAGE_INTERVAL` | 微信读书列表翻页最小间隔（秒） | 1 |
+| `WEREAD_MAX_PAGES` | 单次列表采集最多翻几页（每页约 50 条） | 5 |
 | `SITE_URL` | **网站访问地址（用于RSS图片代理，必须配置）** | http://localhost:5000 |
 | `PORT` | 服务端口 | 5000 |
 | `HOST` | 监听地址 | 0.0.0.0 |
