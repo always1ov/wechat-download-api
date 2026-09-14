@@ -24,7 +24,7 @@
 - **MCP · AI 客户端接入** — 内置 MCP 服务，Claude / Codex / Cline / Cursor 等 AI 客户端可**直接搜索、订阅、读文章**（6 个工具，静态 Token 鉴权，单用户自托管无需 OAuth）
 - **文章内容获取** — 通过 URL 获取文章完整内容（标题、作者、正文 HTML / 纯文本、图片列表）
 - **多格式导出** — 单篇 markdown 增量同步（带 YAML frontmatter，导入 Obsidian / Logseq）；整号文章一键打包成 **Markdown / HTML / Word / PDF / EPUB / Excel / JSON** 7 种格式（Word/PDF/EPUB 图片内嵌离线可看），纯读本地库、不触发抓取
-- **微信读书备用通道** — 公众号后台凭证过期 / 触发频率风控 / 正文抓取遇验证码时，自动改走 [weread.qq.com](https://weread.qq.com) 取文章列表和正文，采集不中断（见 [微信读书备用通道](#微信读书备用通道)）
+- **微信读书备用通道** — 公众号后台凭证过期 / 触发频率风控 / 正文抓取遇验证码时，自动改走 [weread.qq.com](https://weread.qq.com) 取文章列表和正文，采集不中断；**支持扫码登录**，登录态过期还能用 `wr_rt` 自动续期（见 [微信读书备用通道](#微信读书备用通道)）
 - **反风控体系** — Chrome TLS 指纹模拟 + SOCKS5 代理池轮转 + 三层自动限频，有效对抗微信封控
 - **文章列表 & 搜索** — 获取任意公众号历史文章列表，支持分页和关键词搜索
 - **公众号搜索** — 按名称搜索公众号，获取 FakeID
@@ -128,20 +128,32 @@ docker run -d \
 
 ### 配置
 
-**第一步：拿到微信读书 Cookie**
+**方式一：扫码登录（推荐）**
+
+打开管理页 `/admin.html` → 「微信读书备用通道」→ 点「扫码登录微信读书」，用微信扫一下就好。凭证会自动验证并保存到 `data/.weread.json`。
+
+命令行同样可以：
+
+```bash
+# 取二维码（data.qr_image 是 PNG 的 data URI，可直接在浏览器打开）
+curl -X POST http://localhost:5000/api/weread/qrcode
+
+# 扫完轮询状态，state 走 waiting → scanned → confirmed
+curl http://localhost:5000/api/weread/qrcode/status
+```
+
+**方式二：手动粘 Cookie**
 
 1. 浏览器登录 <https://weread.qq.com>
 2. 按 `F12` 打开开发者工具 → `Network` 面板 → 刷新页面，点开任意一个请求
 3. 在 `Request Headers` 里复制完整的 `Cookie`（需要包含 `wr_skey` / `wr_vid` / `wr_rt`）
 
-**第二步：填进去**（二选一）
-
 ```bash
-# 方式一：环境变量（优先级最高）
+# 环境变量（优先级高于管理页写入）
 # .env
 WEREAD_COOKIE=wr_vid=...; wr_skey=...; wr_rt=...
 
-# 方式二：接口写入，存到 data/.weread.json，不用重启
+# 或接口写入，存到 data/.weread.json，不用重启
 curl -X POST http://localhost:5000/api/weread/cookie \
   -H "Content-Type: application/json" \
   -d '{"cookie": "wr_vid=...; wr_skey=...; wr_rt=..."}'
@@ -153,6 +165,16 @@ curl -X POST http://localhost:5000/api/weread/cookie \
 curl http://localhost:5000/api/weread/status
 # {"success":true,"data":{"configured":true,"enabled":true,"article_source":"auto",...}}
 ```
+
+### 登录态自动续期
+
+微信读书的 `wr_skey` 是**短效令牌**（扫码下发的往往只有 8 个字符），过期后接口返回 `-2012`；`wr_rt` 才是长期 refreshToken。
+
+所以遇到 `-2012` / `-2041` 时，本项目会自动 `POST /web/login/renewal`，用 `wr_rt` 换一个新的 `wr_skey` 并重试本次请求 —— **不用重新扫码，也不用重新粘 Cookie**。续期结果会写回 `data/.weread.json`，重启后继续有效（`WEREAD_COOKIE` 环境变量托管时只在内存中生效，因为程序不会去改你的部署配置）。
+
+续期在进程内串行并带 30 秒冷却，多个轮询任务同时撞到过期时只会打一次续期接口。想关掉设 `WEREAD_AUTO_RENEW=false`；想手动触发用 `POST /api/weread/renew`。
+
+> 扫码登录本身也依赖这条：微信读书刚下发的短 `wr_skey` 在不少环境下会被直接判 `-2012`，登录流程会先续期拿到可用的 `wr_skey`，验证通过才算登录成功。
 
 ### 生效方式
 
@@ -175,16 +197,20 @@ curl http://localhost:5000/api/weread/status
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/api/weread/status` | 通道状态（是否已配置 / 是否启用 / 取数策略），不回传完整 Cookie |
-| `POST` | `/api/weread/cookie` | 配置 Cookie，保存后立刻校验一次 |
+| `POST` | `/api/weread/qrcode` | 获取登录二维码（PNG data URI） |
+| `GET` | `/api/weread/qrcode/status` | 查询扫码状态（waiting / scanned / confirmed / expired / error） |
+| `DELETE` | `/api/weread/qrcode` | 取消当前扫码会话 |
+| `POST` | `/api/weread/cookie` | 手动配置 Cookie，保存后立刻校验一次 |
 | `DELETE` | `/api/weread/cookie` | 清除已保存的 Cookie |
 | `POST` | `/api/weread/verify` | 校验当前 Cookie 是否还有效 |
+| `POST` | `/api/weread/renew` | 手动用 `wr_rt` 续期 `wr_skey` |
 | `POST` | `/api/weread/shelf` | 手动把公众号加入微信读书书架 |
 | `GET` | `/api/weread/articles?fakeid=xxx` | 直连微信读书取文章列表（完全不经过后台） |
 | `GET` | `/api/weread/content?review_id=xxx` | 直连微信读书取正文，也可传 `url` + `fakeid` |
 
 ### 已知限制
 
-- **Cookie 也会过期**：过期后接口返回 `-2012` / `-2041`，重新复制一次即可。两条通道的凭证互不相关，同时配上才是真的双保险。
+- **`wr_rt` 本身也有寿命**：`wr_skey` 过期能自动续期，但 `wr_rt` 失效后（长期不用 / 微信读书侧主动失效）续期也会失败，这时需要重新扫码。两条通道的凭证互不相关，同时配上才是真的双保险。
 - **拿不到「号内搜索」**：微信读书没有对应接口，`/api/public/articles` 带 `keyword` 回退到微信读书时，只能对已拉回的列表做标题/摘要过滤，召回范围受 `WEREAD_MAX_PAGES` 限制。
 - **正文接口限流较严**：`WEREAD_CONTENT_INTERVAL` 建议保持 ≥ 2 秒。
 - **只认短链**：`reviewId` 由 `bookId` + 文章短链 token 拼成，所以 `/api/article` 走微信读书兜底时只支持 `https://mp.weixin.qq.com/s/<token>` 形式的链接；长链（`/s?__biz=...`）没有 token，推不出 `reviewId`。
@@ -683,7 +709,8 @@ cp env.example .env
 | `ARTICLES_PER_POLL` | 每次轮询每个公众号拉取的文章批次数 | 10 |
 | `RSS_FETCH_FULL_CONTENT` | RSS 是否获取完整内容（true/false） | true |
 | `PROXY_URLS` | **SOCKS5 代理池地址（强烈建议配置，避免账号风控）** | 空 |
-| `WEREAD_COOKIE` | **微信读书 Cookie（后台失效时的备用通道，强烈建议配置）** | 空 |
+| `WEREAD_COOKIE` | **微信读书 Cookie（后台失效时的备用通道，强烈建议配置；也可在管理页扫码登录）** | 空 |
+| `WEREAD_AUTO_RENEW` | wr_skey 过期时自动用 wr_rt 续期 | true |
 | `ARTICLE_SOURCE` | 取数策略：`auto` / `mp` / `weread` | auto |
 | `WEREAD_ENABLED` | 强制开关微信读书通道（留空=配了 Cookie 就启用） | 空 |
 | `WEREAD_AUTO_ADD_SHELF` | 采集前自动把公众号加入微信读书书架 | true |

@@ -195,3 +195,48 @@ def test_weread_content_endpoint_requires_identifiers(client):
     body = client.get("/api/weread/content").json()
     assert body["success"] is False
     assert "review_id" in body["error"]
+
+
+# ── 扫码登录 / 续期接口 ────────────────────────────────────
+
+def test_weread_qrcode_endpoint(client, monkeypatch):
+    import httpx
+
+    from utils.weread_qr import WereadQRLogin, weread_qr_login
+
+    def handler(request):
+        if request.url.path == "/api/auth/getLoginUid":
+            return httpx.Response(200, json={"uid": "uid-1"})
+        return httpx.Response(200, json={"succeed": False, "logicCode": 0})
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        WereadQRLogin, "_new_client",
+        lambda self: httpx.AsyncClient(transport=transport, follow_redirects=True),
+    )
+
+    body = client.post("/api/weread/qrcode").json()
+    assert body["success"] is True
+    assert body["data"]["uid"] == "uid-1"
+    assert body["data"]["qr_image"].startswith("data:image/png;base64,")
+    assert body["data"]["state"] == "waiting"
+
+    status = client.get("/api/weread/qrcode/status").json()
+    assert status["data"]["state"] in ("waiting", "scanned")
+
+    assert client.request("DELETE", "/api/weread/qrcode").json()["data"]["state"] == "idle"
+
+
+def test_weread_renew_requires_cookie(client, monkeypatch):
+    monkeypatch.delenv("WEREAD_COOKIE", raising=False)
+    body = client.post("/api/weread/renew").json()
+    assert body["success"] is False
+    assert "未配置" in body["error"]
+
+
+def test_weread_renew_reports_missing_wr_rt(client, monkeypatch):
+    """没有 wr_rt 就续不了期，提示要说清楚下一步做什么。"""
+    monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=only")
+    body = client.post("/api/weread/renew").json()
+    assert body["success"] is False
+    assert "wr_rt" in body["error"]

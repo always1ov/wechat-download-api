@@ -48,6 +48,8 @@ class FakeWeread:
                 raise fake.errors[path]
             if path == "/web/shelf/bookIds":
                 return {"bookIds": fake.shelf if fake.shelf is not None else []}
+            if path == "/web/shelf/sync":
+                return {"synckey": 1, "books": []}
             if path in ("/mp/shelf/addToShelf", "/web/shelf/add"):
                 return {"errCode": 0}
             if path == "/web/mp/articles":
@@ -243,9 +245,21 @@ async def test_fetch_article_content_raises_on_empty(monkeypatch):
             await client.fetch_article_content("MP_WXS_1_tok")
 
 
+async def test_verify_uses_shelf_sync_with_empty_user_vid(monkeypatch):
+    """userVid 必须传空字符串 —— 传真实 vid 反而会被判 -2012。"""
+    fake = FakeWeread(shelf=[]).install(monkeypatch)
+
+    async with WereadClient() as client:
+        ok, _ = await client.verify()
+
+    assert ok is True
+    call = next(c for c in fake.calls if c[1] == "/web/shelf/sync")
+    assert call[2] == {"userVid": "", "synckey": 0}
+
+
 async def test_verify_reports_expired_cookie(monkeypatch):
-    FakeWeread(errors={"/web/shelf/bookIds": WereadError(-2012, "login timeout",
-                                                         retriable=False)}).install(monkeypatch)
+    FakeWeread(errors={"/web/shelf/sync": WereadError(-2012, "login timeout",
+                                                      retriable=False)}).install(monkeypatch)
 
     async with WereadClient() as client:
         ok, message = await client.verify()

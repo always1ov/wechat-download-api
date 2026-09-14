@@ -112,6 +112,16 @@ def auto_add_to_shelf() -> bool:
     return _env_bool("WEREAD_AUTO_ADD_SHELF", True)
 
 
+def user_agent() -> str:
+    """请求用的 UA，可用 WEREAD_USER_AGENT 覆盖。"""
+    return _env_str("WEREAD_USER_AGENT") or DEFAULT_USER_AGENT
+
+
+def auto_renew() -> bool:
+    """wr_skey 失效时是否自动用 wr_rt 续期。"""
+    return _env_bool("WEREAD_AUTO_RENEW", True)
+
+
 def is_enabled() -> bool:
     """微信读书通道是否可用。
 
@@ -153,10 +163,34 @@ class WereadError(Exception):
             return COOKIE_MISSING_MSG
         if self.code in AUTH_ERROR_CODES:
             return COOKIE_EXPIRED_MSG
+        # 字符串 code 是本地判定出来的问题（缺字段、解析不出正文等），
+        # message 本身就是完整的中文说明，再套一层「接口失败」反而绕。
+        # network_error 例外：它的 message 是原始异常文本，需要前缀点题。
+        if isinstance(self.code, str) and self.code != "network_error":
+            return self.message
         return f"微信读书接口失败: {self.message}"
 
 
 # ── 标识换算 ──────────────────────────────────────────────
+
+def parse_cookie(cookie: str) -> Dict[str, str]:
+    """Cookie 串 → 字段字典（保持原顺序）。"""
+    pairs: Dict[str, str] = {}
+    for part in str(cookie or "").split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = key.strip()
+        if key:
+            pairs[key] = value.strip()
+    return pairs
+
+
+def format_cookie(pairs: Dict[str, str]) -> str:
+    """字段字典 → Cookie 串（丢掉空值）。"""
+    return "; ".join(f"{k}={v}" for k, v in pairs.items() if v)
+
 
 def fakeid_to_book_id(fakeid: str) -> str:
     """fakeid（base64）→ 微信读书 bookId。已经是 bookId 或纯数字 biz 时原样/补前缀。"""
@@ -272,6 +306,9 @@ class WereadAuth:
         self._cache: Dict = {}
         self._last_loaded_at = 0.0
         self._load_ttl = 30.0
+        # 续期换来的新 Cookie：优先级最高，连 WEREAD_COOKIE 环境变量也盖过。
+        # 环境变量里那份此时已经是过期的 wr_skey，继续用它只会一直 -2012。
+        self._runtime_cookie = ""
         self._initialized = True
 
     # --- 内部 ---
@@ -305,11 +342,41 @@ class WereadAuth:
     # --- 对外 ---
 
     def get_cookie(self) -> str:
-        """当前生效的 Cookie（环境变量优先）。"""
+        """当前生效的 Cookie：续期结果 > 环境变量 > data/.weread.json。"""
+        if self._runtime_cookie:
+            return self._runtime_cookie
         env_cookie = self.normalize_cookie(os.getenv("WEREAD_COOKIE", ""))
         if env_cookie:
             return env_cookie
         return self.normalize_cookie(self._load().get("cookie", ""))
+
+    def set_runtime_cookie(self, cookie: str) -> None:
+        """记下续期后的 Cookie。
+
+        内存里立刻生效；非环境变量托管时同时落盘，重启后不用重新续期。
+        环境变量托管的情况只留在内存 —— 改不了别人的部署配置。
+        """
+        normalized = self.normalize_cookie(cookie)
+        if not normalized:
+            return
+        self._runtime_cookie = normalized
+        if self.is_env_managed():
+            return
+        payload = dict(self._load() or {})
+        payload.update({
+            "cookie": normalized,
+            "vid": self.extract_vid(normalized) or payload.get("vid", ""),
+            "renewed_at": int(time.time()),
+        })
+        try:
+            self.credentials_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.credentials_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning("续期后的微信读书 Cookie 落盘失败（内存仍生效）: %s", e)
+            return
+        self._cache = payload
+        self._last_loaded_at = time.time()
 
     def is_env_managed(self) -> bool:
         return bool(self.normalize_cookie(os.getenv("WEREAD_COOKIE", "")))
@@ -339,6 +406,7 @@ class WereadAuth:
             return False, f"保存失败: {e}"
         self._cache = payload
         self._last_loaded_at = time.time()
+        self._runtime_cookie = ""   # 用户手动换了 Cookie，旧的续期结果作废
         reset_shelf_cache()
         if self.is_env_managed():
             return True, "已保存，但 WEREAD_COOKIE 环境变量优先生效，需改环境变量才会生效"
@@ -353,6 +421,7 @@ class WereadAuth:
             return False
         self._cache = {}
         self._last_loaded_at = time.time()
+        self._runtime_cookie = ""
         reset_shelf_cache()
         return True
 
@@ -391,13 +460,23 @@ async def _throttle(interval: float):
         _last_request_at = time.monotonic()
 
 
+# 续期：进程内串行 + 冷却，避免多个轮询任务同时去打续期接口
+_renew_lock = asyncio.Lock()
+_last_renew_at = 0.0
+_last_renew_ok = False
+RENEW_COOLDOWN = 30.0
+
+
 # 已确认在书架上的 bookId，避免每轮轮询都重复 addToShelf
 _shelf_confirmed: set = set()
 
 
 def reset_shelf_cache():
-    """换 Cookie（换账号）后书架状态不再可信，清空缓存。"""
+    """换 Cookie（换账号）后书架状态和续期冷却都不再可信，一起清掉。"""
+    global _last_renew_at, _last_renew_ok
     _shelf_confirmed.clear()
+    _last_renew_at = 0.0
+    _last_renew_ok = False
 
 
 # ── 响应解析 ──────────────────────────────────────────────
@@ -550,6 +629,86 @@ def process_content_html(html: str, proxy_base_url: Optional[str] = None,
     return result
 
 
+async def renew_cookie_value(cookie: str, timeout: float = 30.0,
+                             client_factory=None) -> str:
+    """POST /web/login/renewal，用 wr_rt 换一个新的 wr_skey，返回更新后的 Cookie 串。
+
+    wr_skey 是短效令牌（登录下发的往往只有 8 字符），过期后接口返回 -2012；
+    wr_rt 是长期 refreshToken，拿它就能一直换新的 wr_skey，不用重新扫码。
+
+    实测要点（来自 rachelos/we-mp-rss 的 driver/weread_qr.py）：
+    - 必须带上完整登录 Cookie，否则服务端按游客处理，返回 -2013 鉴权失败；
+    - body 固定为 {"rq": "%2Fweb%2Fbook%2Fread", "ql": true}；
+    - 新 wr_skey 由 Set-Cookie 下发，可能仍是 8 字符短值 —— 不能按长度判成败。
+
+    本函数只负责换，不负责存 —— 登录流程要先验证再决定存哪份。
+    """
+    pairs = parse_cookie(cookie)
+    if not pairs.get("wr_rt"):
+        raise WereadError(
+            "missing_wr_rt",
+            "Cookie 里没有 wr_rt，无法自动续期（请重新扫码或重贴 Cookie）",
+            retriable=False,
+        )
+
+    headers = {
+        "Cookie": format_cookie(pairs),
+        "User-Agent": user_agent(),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Origin": WEREAD_BASE,
+        "Referer": f"{WEREAD_BASE}/",
+        "Content-Type": "application/json;charset=UTF-8",
+    }
+    body = json.dumps({"rq": "%2Fweb%2Fbook%2Fread", "ql": True},
+                      separators=(",", ":"))
+
+    def _default_factory():
+        return httpx.AsyncClient(timeout=timeout, follow_redirects=True)
+
+    factory = client_factory or _default_factory
+    try:
+        async with factory() as client:
+            resp = await client.post(
+                f"{WEREAD_BASE}/web/login/renewal",
+                content=body.encode("utf-8"),
+                headers=headers,
+            )
+    except httpx.RequestError as exc:
+        raise WereadError("network_error", f"续期请求失败: {exc}") from exc
+
+    updated = dict(pairs)
+    new_skey = ""
+    for name in ("wr_skey", "wr_vid", "wr_rt"):
+        value = resp.cookies.get(name)
+        if value:
+            updated[name] = value
+            if name == "wr_skey":
+                new_skey = value
+
+    # 兜底：有的响应不走 Set-Cookie，把新 skey 直接放在 JSON body 里
+    if not new_skey:
+        try:
+            data = resp.json()
+        except (ValueError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict):
+            for field in ("wr_skey", "skey", "accessToken"):
+                value = data.get(field)
+                if isinstance(value, str) and value:
+                    new_skey = value
+                    updated["wr_skey"] = value
+                    break
+
+    if not new_skey:
+        raise WereadError(
+            "renew_failed", f"续期接口未下发新 wr_skey (HTTP {resp.status_code})"
+        )
+
+    logger.info("[WeRead] wr_skey 续期成功 (len=%d)", len(new_skey))
+    return format_cookie(updated)
+
+
 # ── 客户端 ────────────────────────────────────────────────
 
 class WereadClient:
@@ -559,17 +718,24 @@ class WereadClient:
     复用连接 —— 轮询器批量抓正文时用后者省掉每篇一次 TLS 握手。
     """
 
-    def __init__(self, cookie: Optional[str] = None, timeout: float = 30.0):
+    def __init__(self, cookie: Optional[str] = None, timeout: float = 30.0,
+                 allow_renew: bool = True):
         self._cookie = WereadAuth.normalize_cookie(cookie) if cookie else ""
         self._timeout = timeout
+        # 扫码登录时要关掉：那会儿还在挑哪份 Cookie 能用，续期结果不该写进存储
+        self._allow_renew = allow_renew
         self._client: Optional[httpx.AsyncClient] = None
 
-    async def __aenter__(self) -> "WereadClient":
-        self._client = httpx.AsyncClient(
+    def _new_client(self) -> httpx.AsyncClient:
+        """建 HTTP 客户端。集中一处，测试可以在这里换 MockTransport。"""
+        return httpx.AsyncClient(
             timeout=self._timeout,
             follow_redirects=True,
             limits=httpx.Limits(max_keepalive_connections=4, max_connections=8),
         )
+
+    async def __aenter__(self) -> "WereadClient":
+        self._client = self._new_client()
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -587,7 +753,7 @@ class WereadClient:
                  json_body: bool = False) -> Dict[str, str]:
         headers = {
             "Cookie": self.cookie,
-            "User-Agent": _env_str("WEREAD_USER_AGENT") or DEFAULT_USER_AGENT,
+            "User-Agent": user_agent(),
             "Accept": accept,
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Origin": WEREAD_BASE,
@@ -600,6 +766,32 @@ class WereadClient:
     async def _request(self, method: str, path: str, *, params: Optional[Dict] = None,
                        json_data: Optional[Dict] = None, as_json: bool = True,
                        interval: float = 0.0):
+        """发请求；wr_skey 过期时自动续期并重试一次。
+
+        wr_skey 是短效令牌，过期后接口返回 -2012/-2041。只要 Cookie 里还有
+        wr_rt（长期 refreshToken），就能用 /web/login/renewal 换一个新的，
+        用户不必重新扫码或重贴 Cookie。
+        """
+        try:
+            return await self._request_once(
+                method, path, params=params, json_data=json_data,
+                as_json=as_json, interval=interval,
+            )
+        except WereadError as exc:
+            if not (self._allow_renew and exc.is_auth_error
+                    and exc.code in AUTH_ERROR_CODES and auto_renew()):
+                raise
+            if not await self._try_renew():
+                raise
+            logger.info("[WeRead] wr_skey 已续期，重试 %s", path)
+            return await self._request_once(
+                method, path, params=params, json_data=json_data,
+                as_json=as_json, interval=interval,
+            )
+
+    async def _request_once(self, method: str, path: str, *, params: Optional[Dict] = None,
+                            json_data: Optional[Dict] = None, as_json: bool = True,
+                            interval: float = 0.0):
         if not self.cookie:
             raise WereadError("missing_cookie", COOKIE_MISSING_MSG, retriable=False)
 
@@ -616,7 +808,7 @@ class WereadClient:
                     method, url, params=params, json=json_data, headers=headers
                 )
             else:
-                async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
+                async with self._new_client() as client:
                     resp = await client.request(
                         method, url, params=params, json=json_data, headers=headers
                     )
@@ -640,7 +832,50 @@ class WereadClient:
             raise WereadError(
                 "invalid_json", f"{path} 未返回 JSON（Cookie 可能已失效）"
             ) from exc
+
+        # 鉴权/风控错误码在这里就抛，_request 才能据此触发续期重试；
+        # 其它业务错误码留给各自的解析函数处理。
+        if isinstance(payload, dict):
+            raw_code = payload.get("errCode", payload.get("errcode", 0))
+            try:
+                code = int(raw_code or 0)
+            except (TypeError, ValueError):
+                code = 0
+            if code in AUTH_ERROR_CODES:
+                raise WereadError(
+                    code,
+                    payload.get("errMsg") or payload.get("errmsg") or str(code),
+                    retriable=False,
+                )
         return payload
+
+    # --- 登录态续期 ---
+
+    async def _try_renew(self) -> bool:
+        """续期 wr_skey。进程内串行 + 冷却，避免并发轮询时一窝蜂去续。"""
+        global _last_renew_at, _last_renew_ok
+        async with _renew_lock:
+            # 别的协程刚续过，直接复用它的结果，别重复打续期接口
+            if time.monotonic() - _last_renew_at < RENEW_COOLDOWN:
+                return _last_renew_ok
+            _last_renew_at = time.monotonic()
+            try:
+                _last_renew_ok = await self.renew_cookie()
+            except WereadError as exc:
+                logger.warning("[WeRead] 续期失败: %s", exc.message)
+                _last_renew_ok = False
+            return _last_renew_ok
+
+    async def renew_cookie(self) -> bool:
+        """续期当前 Cookie 并写回存储。"""
+        renewed = await renew_cookie_value(self.cookie, timeout=self._timeout,
+                                           client_factory=self._new_client)
+        weread_auth.set_runtime_cookie(renewed)
+        if self._cookie:
+            self._cookie = renewed
+        return True
+
+    # --- 兼容旧调用点 ---
 
     # --- 书架 ---
 
@@ -702,11 +937,22 @@ class WereadClient:
         return True, f"「{name or book_id}」已自动加入微信读书书架"
 
     async def verify(self) -> Tuple[bool, str]:
-        """打一次最轻的接口确认 Cookie 还有效。返回 (是否有效, 说明)。"""
+        """打一次最轻的接口确认 Cookie 还有效。返回 (是否有效, 说明)。
+
+        用 /web/shelf/sync 且 userVid 必须传**空字符串** —— rachelos/we-mp-rss
+        实测：userVid 传了真实 vid 反而会触发 -2012「登录超时」。
+        """
         try:
-            await self.get_shelf_book_ids([])
+            payload = await self._request(
+                "GET", "/web/shelf/sync", params={"userVid": "", "synckey": 0}
+            )
         except WereadError as exc:
             return False, exc.user_message
+        if isinstance(payload, dict):
+            try:
+                raise_for_payload(payload)
+            except WereadError as exc:
+                return False, exc.user_message
         return True, "微信读书 Cookie 有效"
 
     # --- 文章 ---

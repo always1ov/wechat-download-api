@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from utils import rss_store, weread_client
 from utils.weread_client import WereadClient, WereadError, weread_auth
+from utils.weread_qr import weread_qr_login
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,55 @@ async def weread_status():
     return WereadResponse(success=True, data=info)
 
 
+@router.post("/weread/qrcode", response_model=WereadResponse, summary="获取微信读书登录二维码")
+async def weread_qrcode():
+    """
+    开一次微信读书扫码登录，返回二维码（PNG data URI），用微信扫一下即可。
+
+    比手动复制 Cookie 省事，而且拿到的 Cookie 带 wr_rt，之后 wr_skey 过期能自动续期。
+
+    **返回字段（均在 `data` 下）：**
+    - `qr_image`: 二维码图片，`data:image/png;base64,...`，可直接塞进 `<img src>`
+    - `confirm_url`: 二维码里的链接（自己渲染二维码时用）
+    - `state`: 初始状态，`waiting`
+    - `expires_in`: 二维码有效期（秒）
+
+    拿到后轮询 `GET /api/weread/qrcode/status` 看扫码结果。
+    """
+    try:
+        data = await weread_qr_login.start()
+    except WereadError as e:
+        return WereadResponse(success=False, error=e.user_message)
+    except Exception as e:
+        logger.error("[WeReadQR] 获取二维码失败: %s", e)
+        return WereadResponse(success=False, error=f"获取二维码失败: {e}")
+    return WereadResponse(success=True, data=data)
+
+
+@router.get("/weread/qrcode/status", response_model=WereadResponse,
+            summary="查询微信读书扫码状态")
+async def weread_qrcode_status():
+    """
+    查询扫码登录进度。前端轮询这个接口（微信读书那边的长轮询由后台任务扛着）。
+
+    **`state` 取值：**
+    - `waiting`: 等待扫码
+    - `scanned`: 已扫码，等手机上确认
+    - `confirmed`: 登录成功，Cookie 已验证并保存
+    - `expired`: 二维码过期，重新获取
+    - `error`: 出错，看 `message`
+    - `idle`: 还没开始
+    """
+    return WereadResponse(success=True, data=weread_qr_login.status())
+
+
+@router.delete("/weread/qrcode", response_model=WereadResponse, summary="取消微信读书扫码登录")
+async def cancel_weread_qrcode():
+    """取消当前扫码会话，停掉后台轮询。"""
+    await weread_qr_login.cancel()
+    return WereadResponse(success=True, data=weread_qr_login.status())
+
+
 @router.post("/weread/cookie", response_model=WereadResponse, summary="配置微信读书 Cookie")
 async def save_weread_cookie(req: CookieRequest):
     """
@@ -109,6 +159,30 @@ async def clear_weread_cookie():
     if not ok:
         return WereadResponse(success=False, error="清除失败，请检查 data 目录权限")
     return WereadResponse(success=True, data=weread_auth.get_info())
+
+
+@router.post("/weread/renew", response_model=WereadResponse, summary="手动续期微信读书登录态")
+async def renew_weread_cookie():
+    """
+    用 Cookie 里的 `wr_rt` 换一个新的 `wr_skey`（POST `/web/login/renewal`）。
+
+    `wr_skey` 是短效令牌，过期后接口返回 -2012；只要 `wr_rt` 还在就能一直换新的，
+    不用重新扫码。正常情况下遇到 -2012 会自动续期，这个接口用于手动触发或排查。
+    """
+    if not weread_auth.is_configured():
+        return WereadResponse(success=False, error=weread_client.COOKIE_MISSING_MSG)
+    try:
+        async with WereadClient() as client:
+            await client.renew_cookie()
+            valid, message = await client.verify()
+    except WereadError as e:
+        return WereadResponse(success=False, error=e.user_message)
+    except Exception as e:
+        return WereadResponse(success=False, error=f"续期失败: {e}")
+
+    info = weread_auth.get_info()
+    info.update({"valid": valid, "message": message})
+    return WereadResponse(success=valid, data=info, error=None if valid else message)
 
 
 @router.post("/weread/verify", response_model=WereadResponse, summary="校验微信读书 Cookie")

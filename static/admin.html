@@ -355,6 +355,42 @@
             color: var(--text-muted);
         }
 
+        .weread-qr {
+            display: none;
+            margin-top: var(--space-md);
+            padding: var(--space-md);
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius-base);
+            background: var(--bg-secondary);
+            text-align: center;
+        }
+
+        .weread-qr.visible { display: block; }
+
+        .weread-qr img {
+            width: 200px;
+            height: 200px;
+            image-rendering: pixelated;
+            background: #fff;
+            padding: var(--space-sm);
+            border-radius: var(--radius-small);
+        }
+
+        .weread-qr .qr-state {
+            margin-top: var(--space-sm);
+            font-size: var(--font-sm);
+            color: var(--text-secondary);
+        }
+
+        .weread-qr .qr-state.ok { color: var(--success-color); font-weight: 600; }
+        .weread-qr .qr-state.bad { color: var(--error-color); }
+
+        .weread-divider {
+            margin: var(--space-md) 0 var(--space-sm);
+            font-size: var(--font-xs);
+            color: var(--text-muted);
+        }
+
         .test-input-group {
             display: flex;
             gap: var(--space-sm);
@@ -656,12 +692,22 @@
                     </div>
                 </div>
                 <div class="weread-status" id="wereadStatus">检查中...</div>
+                <div class="weread-actions">
+                    <button class="btn btn-primary" id="wereadQrBtn" onclick="startWereadQr()">扫码登录微信读书</button>
+                    <span class="weread-hint">推荐：微信扫一下即可，拿到的凭证过期还能自动续期</span>
+                </div>
+                <div class="weread-qr" id="wereadQrPanel">
+                    <img id="wereadQrImg" alt="微信读书登录二维码">
+                    <div class="qr-state" id="wereadQrState">请用微信扫码</div>
+                </div>
+                <div class="weread-divider">或手动粘贴 Cookie：</div>
                 <div class="test-input-group">
                     <input type="password" id="wereadCookie" placeholder="wr_vid=...; wr_skey=...; wr_rt=...">
                     <button class="btn btn-primary" id="wereadSaveBtn" onclick="saveWereadCookie()">保存</button>
                 </div>
                 <div class="weread-actions">
                     <button class="btn btn-ghost" onclick="verifyWereadCookie()">校验</button>
+                    <button class="btn btn-ghost" onclick="renewWereadCookie()">续期</button>
                     <button class="btn btn-ghost" onclick="clearWereadCookie()">清除</button>
                     <span class="weread-hint">浏览器登录 weread.qq.com → F12 → Network → 复制请求头里的完整 Cookie</span>
                 </div>
@@ -947,6 +993,97 @@
                 var res = await fetch('/api/weread/cookie', { method: 'DELETE' });
                 var data = await res.json();
                 wereadFeedback(data.success, data.success ? '已清除' : (data.error || '清除失败'));
+            } catch (e) {
+                wereadFeedback(false, '请求失败: ' + e.message);
+            }
+            loadWereadStatus();
+        }
+
+        var wereadQrTimer = null;
+
+        function stopWereadQrPolling() {
+            if (wereadQrTimer) {
+                clearInterval(wereadQrTimer);
+                wereadQrTimer = null;
+            }
+        }
+
+        async function startWereadQr() {
+            var btn = document.getElementById('wereadQrBtn');
+            var panel = document.getElementById('wereadQrPanel');
+            var img = document.getElementById('wereadQrImg');
+            var state = document.getElementById('wereadQrState');
+
+            stopWereadQrPolling();
+            btn.disabled = true;
+            btn.textContent = '获取二维码...';
+            state.className = 'qr-state';
+            state.textContent = '正在获取二维码...';
+            panel.className = 'weread-qr visible';
+            img.removeAttribute('src');
+
+            try {
+                var res = await fetch('/api/weread/qrcode', { method: 'POST' });
+                var data = await res.json();
+                if (!data.success) {
+                    state.className = 'qr-state bad';
+                    state.textContent = data.error || '获取二维码失败';
+                    btn.disabled = false;
+                    btn.textContent = '扫码登录微信读书';
+                    return;
+                }
+                img.src = data.data.qr_image;
+                state.textContent = '请用微信扫码';
+                btn.textContent = '重新获取二维码';
+                btn.disabled = false;
+                wereadQrTimer = setInterval(pollWereadQr, 1500);
+            } catch (e) {
+                state.className = 'qr-state bad';
+                state.textContent = '请求失败: ' + e.message;
+                btn.disabled = false;
+                btn.textContent = '扫码登录微信读书';
+            }
+        }
+
+        async function pollWereadQr() {
+            var state = document.getElementById('wereadQrState');
+            var img = document.getElementById('wereadQrImg');
+            try {
+                var res = await fetch('/api/weread/qrcode/status');
+                var data = await res.json();
+                if (!data.success) return;
+
+                var s = data.data.state;
+                state.className = 'qr-state';
+                if (s === 'waiting') {
+                    state.textContent = '请用微信扫码';
+                } else if (s === 'scanned') {
+                    state.textContent = data.data.message || '已扫码，请在手机上确认';
+                } else if (s === 'confirmed') {
+                    stopWereadQrPolling();
+                    state.className = 'qr-state ok';
+                    state.textContent = '登录成功，凭证已保存';
+                    img.removeAttribute('src');
+                    document.getElementById('wereadQrBtn').textContent = '扫码登录微信读书';
+                    loadWereadStatus();
+                } else if (s === 'expired' || s === 'error') {
+                    stopWereadQrPolling();
+                    state.className = 'qr-state bad';
+                    state.textContent = data.data.message || '登录失败，请重新获取二维码';
+                    img.removeAttribute('src');
+                    document.getElementById('wereadQrBtn').textContent = '重新获取二维码';
+                }
+            } catch (e) {
+                /* 网络抖动就等下一轮，不打断用户 */
+            }
+        }
+
+        async function renewWereadCookie() {
+            try {
+                var res = await fetch('/api/weread/renew', { method: 'POST' });
+                var data = await res.json();
+                wereadFeedback(data.success,
+                    data.success ? '续期成功，wr_skey 已更新' : (data.error || '续期失败'));
             } catch (e) {
                 wereadFeedback(false, '请求失败: ' + e.message);
             }
