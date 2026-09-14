@@ -42,6 +42,10 @@ import httpx
 logger = logging.getLogger(__name__)
 
 WEREAD_BASE = "https://weread.qq.com"
+# i 域是微信读书 App 的接口域，能力比网页域多（可以搜公众号）。
+# 注意：它只认 App 的 UA，也只认真正有效的 wr_skey —— 网页登录直接下发的短值会被
+# 401 顶回来，必须先经 /web/login/renewal 续期。
+WEREAD_APP_BASE = "https://i.weread.qq.com"
 MP_BOOK_PREFIX = "MP_WXS_"
 
 # 微信读书的鉴权/风控错误码。重试没有意义：要么 Cookie 过期要么被限流，
@@ -51,6 +55,12 @@ AUTH_ERROR_CODES = (-2010, -2012, -2041)
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+# 微信读书 Android App 的 UA。i 域按 App 客户端校验，用浏览器 UA 会被拒。
+APP_USER_AGENT = (
+    "WeRead/9.3.1 WRBrand/vivo Dalvik/2.1.0 "
+    "(Linux; U; Android 14; V2171A Build/UP1A.231005.007)"
 )
 
 COOKIE_MISSING_MSG = "未配置微信读书 Cookie，请在管理页面配置或设置 WEREAD_COOKIE 环境变量"
@@ -115,6 +125,15 @@ def auto_add_to_shelf() -> bool:
 def user_agent() -> str:
     """请求用的 UA，可用 WEREAD_USER_AGENT 覆盖。"""
     return _env_str("WEREAD_USER_AGENT") or DEFAULT_USER_AGENT
+
+
+def app_api_enabled() -> bool:
+    """是否启用 i 域（App 接口）。关掉就只走网页域，行为回到接入 i 域之前。"""
+    return _env_bool("WEREAD_APP_API", True)
+
+
+def app_user_agent() -> str:
+    return _env_str("WEREAD_APP_USER_AGENT") or APP_USER_AGENT
 
 
 def auto_renew() -> bool:
@@ -467,16 +486,34 @@ _last_renew_ok = False
 RENEW_COOLDOWN = 30.0
 
 
+# i 域可用性：探测失败后冷却一段时间，别每次请求都去撞一次
+_app_domain_blocked_until = 0.0
+APP_DOMAIN_COOLDOWN = 600.0
+
+
+def app_domain_usable() -> bool:
+    return app_api_enabled() and time.monotonic() >= _app_domain_blocked_until
+
+
+def mark_app_domain_unusable(reason: str = ""):
+    """i 域打不通（401/风控等）时记一笔，冷却期内不再尝试。"""
+    global _app_domain_blocked_until
+    _app_domain_blocked_until = time.monotonic() + APP_DOMAIN_COOLDOWN
+    logger.info("[WeRead] i 域暂不可用（%s），%.0f 秒内只走网页域",
+                reason or "unknown", APP_DOMAIN_COOLDOWN)
+
+
 # 已确认在书架上的 bookId，避免每轮轮询都重复 addToShelf
 _shelf_confirmed: set = set()
 
 
 def reset_shelf_cache():
-    """换 Cookie（换账号）后书架状态和续期冷却都不再可信，一起清掉。"""
-    global _last_renew_at, _last_renew_ok
+    """换 Cookie（换账号）后书架状态、续期冷却、i 域探测结果都不再可信，一起清掉。"""
+    global _last_renew_at, _last_renew_ok, _app_domain_blocked_until
     _shelf_confirmed.clear()
     _last_renew_at = 0.0
     _last_renew_ok = False
+    _app_domain_blocked_until = 0.0
 
 
 # ── 响应解析 ──────────────────────────────────────────────
@@ -583,6 +620,88 @@ def parse_mp_cover(payload: Dict, book_id: str) -> Optional[Dict]:
         "update_time": now,
         "source": "weread",
     }
+
+
+def _unwrap_book(item) -> Optional[Dict]:
+    """搜索结果的一项可能是书本身，也可能包在 bookInfo 里。"""
+    if not isinstance(item, dict):
+        return None
+    inner = item.get("bookInfo")
+    return inner if isinstance(inner, dict) else item
+
+
+def parse_store_search(payload) -> List[Dict]:
+    """解析 i 域 /store/search，挑出其中的公众号（bookId 以 MP_WXS_ 开头）。
+
+    微信读书的搜索结果里书和公众号混在一起，只有 MP_WXS_* 才是公众号；
+    换算回 fakeid 后就能直接喂给本项目既有的订阅/文章接口。
+    """
+    if not isinstance(payload, dict):
+        return []
+    raise_for_payload(payload)
+
+    items = None
+    for key in ("books", "mpInfos", "data", "list"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            items = value
+            break
+    if items is None:
+        return []
+
+    accounts, seen = [], set()
+    for item in items:
+        book = _unwrap_book(item)
+        if not book:
+            continue
+        book_id = str(book.get("bookId") or "").strip()
+        if not book_id.startswith(MP_BOOK_PREFIX) or book_id in seen:
+            continue
+        seen.add(book_id)
+        try:
+            fakeid = book_id_to_fakeid(book_id)
+        except Exception:
+            continue
+        accounts.append({
+            "fakeid": fakeid,
+            "book_id": book_id,
+            "nickname": book.get("title") or book.get("mpName") or "",
+            "alias": book.get("author") or "",
+            "round_head_img": book.get("cover") or book.get("pic") or "",
+            "service_type": 0,
+            "source": "weread",
+        })
+    return accounts
+
+
+def parse_app_articles(payload: Dict, book_id: str = "") -> Tuple[List[Dict], int]:
+    """解析 i 域 /book/articles。
+
+    这个接口和网页域的 /web/mp/articles 返回形态不完全一样：见过 reviews 分组，
+    也见过直接平铺的文章数组。两种都认，拿不准的字段交给 _parse_review 兜。
+    """
+    if not isinstance(payload, dict):
+        raise WereadError("invalid_response", "文章列表不是 JSON 对象")
+    raise_for_payload(payload)
+
+    if isinstance(payload.get("reviews"), list):
+        return parse_mp_articles(payload, book_id)
+
+    items = None
+    for key in ("articles", "updated", "mpArticles", "data"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            items = value
+            break
+    if items is None:
+        return [], 0
+
+    articles = []
+    for item in items:
+        article = _parse_review(item, 0, book_id)
+        if article:
+            articles.append(article)
+    return articles, len(items)
 
 
 def parse_shelf_book_ids(payload) -> Optional[List[str]]:
@@ -750,22 +869,24 @@ class WereadClient:
         return self._cookie or weread_auth.get_cookie()
 
     def _headers(self, accept: str = "application/json, text/plain, */*",
-                 json_body: bool = False) -> Dict[str, str]:
+                 json_body: bool = False, app: bool = False) -> Dict[str, str]:
         headers = {
             "Cookie": self.cookie,
-            "User-Agent": user_agent(),
+            "User-Agent": app_user_agent() if app else user_agent(),
             "Accept": accept,
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Origin": WEREAD_BASE,
-            "Referer": f"{WEREAD_BASE}/",
         }
+        if not app:
+            # i 域是 App 接口，不带浏览器的 Origin/Referer
+            headers["Origin"] = WEREAD_BASE
+            headers["Referer"] = f"{WEREAD_BASE}/"
         if json_body:
             headers["Content-Type"] = "application/json;charset=UTF-8"
         return headers
 
     async def _request(self, method: str, path: str, *, params: Optional[Dict] = None,
                        json_data: Optional[Dict] = None, as_json: bool = True,
-                       interval: float = 0.0):
+                       interval: float = 0.0, app: bool = False):
         """发请求；wr_skey 过期时自动续期并重试一次。
 
         wr_skey 是短效令牌，过期后接口返回 -2012/-2041。只要 Cookie 里还有
@@ -775,7 +896,7 @@ class WereadClient:
         try:
             return await self._request_once(
                 method, path, params=params, json_data=json_data,
-                as_json=as_json, interval=interval,
+                as_json=as_json, interval=interval, app=app,
             )
         except WereadError as exc:
             if not (self._allow_renew and exc.is_auth_error
@@ -786,21 +907,22 @@ class WereadClient:
             logger.info("[WeRead] wr_skey 已续期，重试 %s", path)
             return await self._request_once(
                 method, path, params=params, json_data=json_data,
-                as_json=as_json, interval=interval,
+                as_json=as_json, interval=interval, app=app,
             )
 
     async def _request_once(self, method: str, path: str, *, params: Optional[Dict] = None,
                             json_data: Optional[Dict] = None, as_json: bool = True,
-                            interval: float = 0.0):
+                            interval: float = 0.0, app: bool = False):
         if not self.cookie:
             raise WereadError("missing_cookie", COOKIE_MISSING_MSG, retriable=False)
 
         await _throttle(interval)
 
-        url = f"{WEREAD_BASE}{path}"
+        url = f"{WEREAD_APP_BASE if app else WEREAD_BASE}{path}"
         headers = self._headers(
             accept="text/html,application/xhtml+xml,*/*" if not as_json else "application/json, text/plain, */*",
             json_body=json_data is not None,
+            app=app,
         )
         try:
             if self._client is not None:
@@ -816,6 +938,9 @@ class WereadClient:
             raise WereadError("network_error", str(exc)) from exc
 
         if resp.status_code != 200:
+            # i 域对无效/未续期 skey 直接 401，这时退回网页域，别反复撞
+            if app and resp.status_code in (401, 403):
+                mark_app_domain_unusable(f"HTTP {resp.status_code}")
             raise WereadError(
                 resp.status_code,
                 f"{path} 返回 HTTP {resp.status_code}",
@@ -964,6 +1089,34 @@ class WereadClient:
             interval=page_interval(),
         )
 
+    async def search_mp_accounts(self, keyword: str, count: int = 15) -> List[Dict]:
+        """用微信读书搜公众号（i 域 /store/search）。
+
+        这是 i 域比网页域多出来的能力，也是本项目摆脱「搜索必须依赖公众号后台」
+        的唯一路子。i 域不可用时抛错，由调用方回退到后台 searchbiz。
+        """
+        if not app_domain_usable():
+            raise WereadError("app_domain_unavailable", "微信读书 App 接口当前不可用")
+        payload = await self._request(
+            "GET", "/store/search",
+            params={"v": 2, "scope": 2, "count": count, "type": 0, "keyword": keyword},
+            interval=page_interval(),
+            app=True,
+        )
+        return parse_store_search(payload)
+
+    async def get_app_articles_page(self, book_id: str, offset: int = 0,
+                                    count: int = 20) -> Dict:
+        """i 域的文章列表接口，作为网页域 /web/mp/articles 之外的另一条路。"""
+        if not app_domain_usable():
+            raise WereadError("app_domain_unavailable", "微信读书 App 接口当前不可用")
+        return await self._request(
+            "GET", "/book/articles",
+            params={"bookId": book_id, "offset": offset, "count": count, "synckey": 0},
+            interval=page_interval(),
+            app=True,
+        )
+
     async def get_cover(self, book_id: str) -> Dict:
         return await self._request(
             "GET", "/api/mp/cover", params={"bookId": book_id}, interval=page_interval()
@@ -1013,6 +1166,21 @@ class WereadClient:
                 logger.warning("[WeRead] %s 翻页中断（已取到 %d 篇）: %s",
                                nickname or book_id, len(articles), exc)
                 return articles[:limit]
+
+            # 网页域列表不可用（曾整体被废弃过一阵），先试 i 域的同名能力
+            if app_domain_usable():
+                try:
+                    payload = await self.get_app_articles_page(book_id, count=limit)
+                    app_articles, _ = parse_app_articles(payload, book_id)
+                    if app_articles:
+                        logger.info("[WeRead] %s 网页域列表不可用，改用 i 域取到 %d 篇",
+                                    nickname or book_id, len(app_articles))
+                        return app_articles[:limit]
+                except Exception as app_exc:
+                    # i 域只是额外加的一条路，它出什么问题都不该影响下面的 cover 兜底
+                    logger.info("[WeRead] %s i 域列表也不可用: %s",
+                                nickname or book_id, app_exc)
+
             logger.warning("[WeRead] %s 列表接口不可用（%s），回退到仅取最新一篇",
                            nickname or book_id, exc)
             payload = await self.get_cover(book_id)

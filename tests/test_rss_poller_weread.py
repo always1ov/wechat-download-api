@@ -53,6 +53,8 @@ def _install_weread(monkeypatch, *, articles=None, content=None, error=None):
             ]}
         if path == "/web/mp/content":
             return content or ""
+        if path in ("/book/articles", "/store/search"):
+            raise WereadError(401, "app domain unavailable", retriable=False)
         raise AssertionError(f"unexpected path {path}")
 
     monkeypatch.setattr(WereadClient, "_request", _request)

@@ -24,7 +24,7 @@
 - **MCP · AI 客户端接入** — 内置 MCP 服务，Claude / Codex / Cline / Cursor 等 AI 客户端可**直接搜索、订阅、读文章**（6 个工具，静态 Token 鉴权，单用户自托管无需 OAuth）
 - **文章内容获取** — 通过 URL 获取文章完整内容（标题、作者、正文 HTML / 纯文本、图片列表）
 - **多格式导出** — 单篇 markdown 增量同步（带 YAML frontmatter，导入 Obsidian / Logseq）；整号文章一键打包成 **Markdown / HTML / Word / PDF / EPUB / Excel / JSON** 7 种格式（Word/PDF/EPUB 图片内嵌离线可看），纯读本地库、不触发抓取
-- **微信读书备用通道** — 公众号后台凭证过期 / 触发频率风控 / 正文抓取遇验证码时，自动改走 [weread.qq.com](https://weread.qq.com) 取文章列表和正文，采集不中断；**支持扫码登录**，登录态过期还能用 `wr_rt` 自动续期（见 [微信读书备用通道](#微信读书备用通道)）
+- **微信读书备用通道** — 公众号后台凭证过期 / 触发频率风控 / 正文抓取遇验证码时，自动改走 [weread.qq.com](https://weread.qq.com) 取**搜索、文章列表和正文**，采集不中断；**支持扫码登录**，登录态过期还能用 `wr_rt` 自动续期（见 [微信读书备用通道](#微信读书备用通道)）
 - **反风控体系** — Chrome TLS 指纹模拟 + SOCKS5 代理池轮转 + 三层自动限频，有效对抗微信封控
 - **文章列表 & 搜索** — 获取任意公众号历史文章列表，支持分页和关键词搜索
 - **公众号搜索** — 按名称搜索公众号，获取 FakeID
@@ -176,6 +176,23 @@ curl http://localhost:5000/api/weread/status
 
 > 扫码登录本身也依赖这条：微信读书刚下发的短 `wr_skey` 在不少环境下会被直接判 `-2012`，登录流程会先续期拿到可用的 `wr_skey`，验证通过才算登录成功。
 
+### 两个域：网页域与 App 域
+
+微信读书有两套接口，本项目都用：
+
+| | 网页域 `weread.qq.com` | App 域 `i.weread.qq.com` |
+|---|---|---|
+| 认证 | 浏览器 UA + Cookie | **App UA** + 已续期的 `wr_skey`（未续期直接 401） |
+| 文章列表 | `/web/mp/articles` | `/book/articles` |
+| 正文 | `/web/mp/content` | — |
+| **搜公众号** | 没有 | **`/store/search`** |
+
+App 域多出来的「搜公众号」能力，让本项目**连搜索都不必依赖公众号后台**了 —— 这是此前唯一一个绕不开后台的环节。
+
+App 域按「能用就用」处理：不通（401/风控）就记一笔，10 分钟内只走网页域，功能自动退回到没有 App 域时的样子。想彻底关掉设 `WEREAD_APP_API=false`。
+
+> App 域对登录态要求更严，正好吃我们自建的 `/web/login/renewal` 续期结果。**这条路尚未在真实账号上验证过**，验不通也不会让现有功能变坏。可以用 `GET /api/weread/search?query=xxx` 单独试。
+
 ### 生效方式
 
 默认 `ARTICLE_SOURCE=auto`，**公众号后台优先**，只有后台明确出错才回退，不会平白多打微信读书：
@@ -187,6 +204,7 @@ curl http://localhost:5000/api/weread/status
 | 正文直抓命中验证码 / 风控页 | 用微信读书正文接口补齐该篇正文 |
 | 后台报 `invalid args`（号已注销/改名） | 先问微信读书；读书也拿不到才拉黑该号 |
 | 后台一切正常 | 照常走后台，微信读书不发请求 |
+| **搜公众号**时后台没登录 / 报错 | 改用微信读书 App 域 `/store/search` 搜 |
 
 想钉死某一条通道，把 `ARTICLE_SOURCE` 设成 `mp`（只用后台）或 `weread`（只用微信读书）。
 
@@ -205,13 +223,15 @@ curl http://localhost:5000/api/weread/status
 | `POST` | `/api/weread/verify` | 校验当前 Cookie 是否还有效 |
 | `POST` | `/api/weread/renew` | 手动用 `wr_rt` 续期 `wr_skey` |
 | `POST` | `/api/weread/shelf` | 手动把公众号加入微信读书书架 |
+| `GET` | `/api/weread/search?query=xxx` | 直连微信读书搜公众号（App 域，不经过后台） |
 | `GET` | `/api/weread/articles?fakeid=xxx` | 直连微信读书取文章列表（完全不经过后台） |
 | `GET` | `/api/weread/content?review_id=xxx` | 直连微信读书取正文，也可传 `url` + `fakeid` |
 
 ### 已知限制
 
 - **`wr_rt` 本身也有寿命**：`wr_skey` 过期能自动续期，但 `wr_rt` 失效后（长期不用 / 微信读书侧主动失效）续期也会失败，这时需要重新扫码。两条通道的凭证互不相关，同时配上才是真的双保险。
-- **拿不到「号内搜索」**：微信读书没有对应接口，`/api/public/articles` 带 `keyword` 回退到微信读书时，只能对已拉回的列表做标题/摘要过滤，召回范围受 `WEREAD_MAX_PAGES` 限制。
+- **拿不到「号内搜索」**：微信读书能搜公众号（`/store/search`），但没有「在某个号内搜文章」的接口。`/api/public/articles` 带 `keyword` 回退到微信读书时，只能对已拉回的列表做标题/摘要过滤，召回范围受 `WEREAD_MAX_PAGES` 限制。
+- **App 域未实测**：`i.weread.qq.com` 那几个接口（搜索、列表）是按公开可见的调用形态实现的，尚未在真实账号上跑通。全部挂在回退结构下，不通就退回网页域/公众号后台，不会让现有功能变坏。
 - **正文接口限流较严**：`WEREAD_CONTENT_INTERVAL` 建议保持 ≥ 2 秒。
 - **只认短链**：`reviewId` 由 `bookId` + 文章短链 token 拼成，所以 `/api/article` 走微信读书兜底时只支持 `https://mp.weixin.qq.com/s/<token>` 形式的链接；长链（`/s?__biz=...`）没有 token，推不出 `reviewId`。
 - **列表接口偶发不可用**：微信读书曾一度停掉 `/web/mp/articles`。遇到这种情况会自动退到 `/api/mp/cover`，但那个接口一次只返回**最新一篇**，补不了历史。
@@ -711,6 +731,7 @@ cp env.example .env
 | `PROXY_URLS` | **SOCKS5 代理池地址（强烈建议配置，避免账号风控）** | 空 |
 | `WEREAD_COOKIE` | **微信读书 Cookie（后台失效时的备用通道，强烈建议配置；也可在管理页扫码登录）** | 空 |
 | `WEREAD_AUTO_RENEW` | wr_skey 过期时自动用 wr_rt 续期 | true |
+| `WEREAD_APP_API` | 启用微信读书 App 域接口（`i.weread.qq.com`，多一个搜公众号能力） | true |
 | `ARTICLE_SOURCE` | 取数策略：`auto` / `mp` / `weread` | auto |
 | `WEREAD_ENABLED` | 强制开关微信读书通道（留空=配了 Cookie 就启用） | 空 |
 | `WEREAD_AUTO_ADD_SHELF` | 采集前自动把公众号加入微信读书书架 | true |

@@ -228,6 +228,38 @@ async def add_to_shelf(req: ShelfRequest):
     return WereadResponse(success=ok, data=data, error=None if ok else detail)
 
 
+@router.get("/weread/search", response_model=WereadResponse, summary="通过微信读书搜索公众号")
+async def weread_search(
+    query: str = Query(..., description="公众号名称或关键词"),
+    count: int = Query(15, description="返回数量", ge=1, le=50),
+):
+    """
+    用微信读书搜公众号（i 域 `/store/search`），完全不经过公众号后台。
+
+    这是本项目摆脱「搜索必须依赖公众号后台」的路子：搜到的 `MP_WXS_*` 会换算回
+    `fakeid`，可直接喂给 `/api/public/articles`、`/api/rss/subscribe` 等既有接口。
+
+    i 域只认微信读书 App 的 UA 和**已续期**的 `wr_skey`；不可用时本接口报错，
+    而 `/api/public/searchbiz` 会自动退回公众号后台。
+    """
+    if not weread_auth.is_configured():
+        return WereadResponse(success=False, error=weread_client.COOKIE_MISSING_MSG)
+    try:
+        async with WereadClient() as client:
+            accounts = await client.search_mp_accounts(query, count=count)
+    except WereadError as e:
+        return WereadResponse(success=False, error=e.user_message)
+    except Exception as e:
+        logger.error("[WeRead] 搜索异常: %s", e)
+        return WereadResponse(success=False, error=f"搜索失败: {e}")
+
+    return WereadResponse(success=True, data={
+        "list": accounts,
+        "total": len(accounts),
+        "source": "weread",
+    })
+
+
 @router.get("/weread/articles", response_model=WereadResponse, summary="通过微信读书获取文章列表")
 async def weread_articles(
     fakeid: str = Query(..., description="公众号 FakeID，或 MP_WXS_* 形式的 bookId"),

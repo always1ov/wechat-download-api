@@ -55,6 +55,9 @@ class FakeWeread:
             if path == "/web/mp/articles":
                 offset = int(params.get("offset", 0))
                 return fake.pages.get(offset, {"reviews": []})
+            if path in ("/book/articles", "/store/search"):
+                # i 域：默认当作不可用，需要时由用例单独覆盖
+                raise WereadError(401, "app domain unavailable", retriable=False)
             if path == "/api/mp/cover":
                 return fake.cover or {}
             if path == "/web/mp/content":
