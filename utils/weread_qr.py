@@ -92,16 +92,25 @@ def build_cookie_candidates(jar: Dict[str, str], vid: str,
 
     只留两种：Set-Cookie 原样，以及「wr_skey 换成 refreshToken」。
     其余组合交给续期解决 —— 续期才是官方前端的做法，靠枚举撞对反而脆。
+
+    关键：**wr_rt 要并进每一个候选**，不能只放在第二个候选里。
+    refreshToken 是从登录响应体里拿的，Set-Cookie 不一定下发 wr_rt；而
+    _activate_cookie 取的是第一个验证通过的候选，刚扫完码的 wr_skey 必然有效，
+    于是永远命中第一个。wr_rt 只挂在第二个候选上的话就被丢掉了 ——
+    登录当时一切正常，约 1.5 小时后 wr_skey 过期，自动续期发现没有 wr_rt，
+    救不回来，用户只能反复重新扫码。
     """
     base = {k: v for k, v in jar.items() if v}
     if vid:
         base.setdefault("wr_vid", str(vid))
+    if refresh_token:
+        # Set-Cookie 自己给了就以它为准，别用响应体里的覆盖
+        base.setdefault("wr_rt", quote(refresh_token, safe=""))
 
     candidates = [dict(base)]
     if refresh_token:
         variant = dict(base)
         variant["wr_skey"] = refresh_token
-        variant["wr_rt"] = quote(refresh_token, safe="")
         candidates.append(variant)
 
     out, seen = [], set()

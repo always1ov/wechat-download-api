@@ -11,7 +11,9 @@ import pytest
 from utils import weread_client as wc
 from utils import weread_qr as qr
 from utils.weread_client import WereadClient, WereadError
-from utils.weread_qr import WereadQRLogin, weread_qr_login
+from utils.weread_client import parse_cookie
+from utils.weread_qr import (WereadQRLogin, build_cookie_candidates,
+                             weread_qr_login)
 
 UID = "uid-abc"
 GOOD_COOKIE_SKEY = "goodskey"
@@ -245,3 +247,90 @@ async def test_cancel_stops_polling(monkeypatch):
 
     assert weread_qr_login.status()["state"] == "idle"
     assert weread_qr_login._task is None
+
+
+# ── wr_rt 必须被保住，否则登录完只能活 1.5 小时 ──────────────
+
+def test_candidates_always_carry_refresh_token():
+    """每个候选都得带上 wr_rt。
+
+    微信读书的 Set-Cookie 不一定下发 wr_rt，refreshToken 是从登录响应体里拿的。
+    原来 wr_rt 只出现在「wr_skey 换成 refreshToken」那个备选里，而
+    _activate_cookie 取的是第一个验证通过的候选 —— 刚扫完码的 wr_skey 必然有效，
+    于是永远命中不含 wr_rt 的那份，wr_rt 被丢掉。
+    表现就是：登录当时一切正常，约 1.5 小时后 wr_skey 过期，自动续期却发现
+    没有 wr_rt，救不回来，用户只能反复重新扫码。
+    """
+    jar = {"wr_vid": "42", "wr_skey": "short1"}      # Set-Cookie 里没有 wr_rt
+    candidates = build_cookie_candidates(jar, "42", "the-refresh-token")
+
+    assert candidates, "至少要有一个候选"
+    for cookie in candidates:
+        assert parse_cookie(cookie).get("wr_rt"), \
+            f"候选里没有 wr_rt，过期后必然救不回来: {cookie}"
+
+
+def test_jar_refresh_token_is_not_overwritten():
+    """Set-Cookie 自己给了 wr_rt 时，以它为准，别用响应体里的覆盖掉。"""
+    jar = {"wr_vid": "42", "wr_skey": "short1", "wr_rt": "from-set-cookie"}
+    candidates = build_cookie_candidates(jar, "42", "from-body")
+
+    assert parse_cookie(candidates[0])["wr_rt"] == "from-set-cookie"
+
+
+def test_no_refresh_token_anywhere_still_yields_a_candidate():
+    """确实哪儿都没有 wr_rt 时不能崩，照样给出候选（后续会提示重新扫码）。"""
+    jar = {"wr_vid": "42", "wr_skey": "short1"}
+    candidates = build_cookie_candidates(jar, "42", "")
+
+    assert len(candidates) == 1
+    assert parse_cookie(candidates[0]).get("wr_rt") is None
+
+
+async def test_login_persists_wr_rt_when_set_cookie_omits_it(monkeypatch, tmp_path):
+    """端到端：Set-Cookie 不给 wr_rt 时，登录存下来的 Cookie 仍必须含 wr_rt。
+
+    这是「自动维护救不回来」的根因回归测试 —— 登录当时看不出问题，
+    要等 wr_skey 过期才暴露，所以必须在这里钉住。
+    """
+    monkeypatch.setattr(wc.weread_auth, "credentials_file", tmp_path / ".weread.json")
+    monkeypatch.delenv("WEREAD_COOKIE", raising=False)
+    wc.weread_auth._runtime_cookie = ""
+
+    def handler(request):
+        path = request.url.path
+        if path.endswith("/api/auth/getLoginUid"):
+            return httpx.Response(200, json={"uid": "uid-1"})
+        if path.endswith("/api/auth/getLoginInfo"):
+            # 关键：Set-Cookie 只给 wr_skey / wr_vid，wr_rt 只在响应体里
+            return httpx.Response(
+                200,
+                json={"succeed": 1, "vid": 42, "refreshToken": "long-lived-token"},
+                headers={"set-cookie": "wr_skey=short1; Path=/"},
+            )
+        if path == "/web/shelf/sync":
+            return httpx.Response(200, json={"synckey": 1, "books": []})
+        return httpx.Response(200, json={})
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(WereadQRLogin, "_new_client",
+                        lambda self: httpx.AsyncClient(transport=transport,
+                                                       follow_redirects=True))
+    monkeypatch.setattr(WereadClient, "_new_client",
+                        lambda self: httpx.AsyncClient(transport=transport,
+                                                       follow_redirects=True))
+
+    login = WereadQRLogin()
+    login._instance = None
+    await login.start()
+    for _ in range(50):
+        if login.status()["state"] in ("confirmed", "error", "expired"):
+            break
+        await asyncio.sleep(0.05)
+
+    assert login.status()["state"] == "confirmed", login.status()["message"]
+    saved = wc.weread_auth.get_cookie()
+    assert "wr_rt" in saved, f"登录存下的 Cookie 没有 wr_rt，1.5 小时后就救不回来: {saved}"
+    assert wc.weread_auth.has_refresh_token() is True
+
+    wc.weread_auth._runtime_cookie = ""
