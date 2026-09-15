@@ -193,6 +193,26 @@
             color: #fff;
         }
 
+        /* 登录态守护报警 */
+        /* display:flex 的优先级高于浏览器默认的 [hidden]{display:none}，
+           不补这一条的话 hidden=true 也照样显示出来 */
+        .keep-alert[hidden] { display: none; }
+
+        .keep-alert {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-md);
+            flex-wrap: wrap;
+            background: rgba(255, 77, 79, 0.06);
+            border: 1px solid rgba(255, 77, 79, 0.3);
+            border-radius: var(--radius-large);
+            padding: var(--space-md) var(--space-lg);
+            margin-bottom: var(--space-lg);
+            font-size: var(--font-sm);
+            color: var(--error-color);
+        }
+
         /* Grid */
         .grid {
             display: grid;
@@ -516,6 +536,12 @@
             </div>
         </div>
 
+        <!-- 登录态守护报警：只有真的需要重新扫码时才出现 -->
+        <div class="keep-alert" id="keepAlert" hidden>
+            <span id="keepAlertText"></span>
+            <a class="btn-sm btn-primary" href="/login.html">去重新扫码</a>
+        </div>
+
         <!-- Cards Grid -->
         <div class="grid">
             <!-- Quick Actions -->
@@ -657,6 +683,8 @@
                     actions.innerHTML =
                         '<button class="btn-sm" onclick="checkStatus()">刷新</button>' +
                         '<button class="btn-sm btn-danger" onclick="doLogout()">退出登录</button>';
+
+                    showKeepalive(detail);
                 } else {
                     icon.className = 'status-icon offline';
                     icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#ff4d4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
@@ -675,6 +703,46 @@
 
                 actions.innerHTML = '<button class="btn-sm" onclick="checkStatus()">重试</button>';
             }
+        }
+
+        // 登录态守护：正常时只在详情行补一句，坏到要重新扫码才挂红色横幅
+        async function showKeepalive(detailEl) {
+            var alertBox = document.getElementById('keepAlert');
+            try {
+                var d = await (await fetch('/api/weread/status')).json();
+                var k = (d.data || {}).keepalive || {};
+                if (!k.enabled) {
+                    alertBox.hidden = true;
+                    detailEl.textContent += ' · 自动维护已关闭';
+                    return;
+                }
+                if (k.needs_relogin) {
+                    document.getElementById('keepAlertText').textContent =
+                        '微信读书登录态已失效，自动续期也救不回来了' +
+                        (k.message ? '（' + k.message + '）' : '') + '，需要重新扫码。';
+                    alertBox.hidden = false;
+                    // /api/admin/status 只看「配没配 Cookie」，配了就报「登录正常」。
+                    // 守护已经确认它其实是死的，这里把状态卡一起改掉，
+                    // 否则上面绿勾「登录正常」和下面红条自相矛盾。
+                    var icon = document.getElementById('statusIcon');
+                    icon.className = 'status-icon offline';
+                    icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#ff4d4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+                    detailEl.textContent = detailEl.textContent.replace('登录正常', '登录已失效');
+                    return;
+                }
+                alertBox.hidden = true;
+                detailEl.textContent += ' · 自动维护中' + (k.last_check_at ? '，上次检查 ' + ago(k.last_check_at) : '');
+            } catch (e) {
+                alertBox.hidden = true;
+            }
+        }
+
+        function ago(ts) {
+            var s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+            if (s < 60) return s + ' 秒前';
+            if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+            if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
+            return Math.floor(s / 86400) + ' 天前';
         }
 
         async function doLogout() {

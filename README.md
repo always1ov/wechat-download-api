@@ -193,10 +193,43 @@ curl -X POST http://localhost:5000/api/weread/cookie \
 
 ```bash
 curl http://localhost:5000/api/weread/status
-# {"success":true,"data":{"configured":true,"enabled":true,"article_source":"auto",...}}
+# {"success":true,"data":{"configured":true,"enabled":true,"vid":"...","keepalive":{...}}}
 ```
 
-### 登录态自动续期
+### 登录态自动维护
+
+部署完扫一次码，之后基本不用再管：
+
+| 机制 | 什么时候动 | 干什么 |
+|------|-----------|--------|
+| **被动续期** | 某个请求撞上 `-2012` / `-2041` | 当场用 `wr_rt` 换新 `wr_skey`，重试这次请求 |
+| **主动守护** | 启动 30 秒后一次，之后每 6 小时 | 探活一次；坏了就续期，续完再验一次确认真的活了 |
+
+只有被动续期是不够的：容器刚起或长时间没人调接口时，第一发请求必然先失败一次；
+轮询器一小时才跑一轮，这一次失败就是一小时的空窗。守护把失败挡在用户看见之前。
+
+**`wr_rt` 也过期了怎么办**（长期不用 / 微信读书侧主动失效）—— 这时续期救不回来，
+只能重新扫码。守护会连续失败两次后认定这种情况，然后：
+
+- 发 webhook 报警（配了 `WEBHOOK_URL` 的话），告诉你去 `/login.html` 重新扫
+- 管理页挂一条红色横幅，登录状态卡同步改成「登录已失效」
+
+恢复正常后还会再发一条，免得你以为一直挂着。
+
+```bash
+# 不想等下一轮，立刻查一次
+curl -X POST http://localhost:5000/api/weread/keepalive/check
+
+# 看守护状态（上次检查/续期时间、连续失败次数、要不要重新扫码）
+curl http://localhost:5000/api/weread/status   # 看 data.keepalive
+```
+
+| 变量 | 说明 | 默认 |
+|------|------|------|
+| `WEREAD_KEEPALIVE` | 是否开启守护 | `true` |
+| `WEREAD_KEEPALIVE_INTERVAL` | 检查间隔（秒），低于 300 会被抬到 300 | `21600`（6 小时） |
+
+#### 续期是怎么做的
 
 微信读书的 `wr_skey` 是**短效令牌**（扫码下发的往往只有 8 个字符），过期后接口返回 `-2012`；`wr_rt` 才是长期 refreshToken。
 

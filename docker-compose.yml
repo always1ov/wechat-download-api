@@ -49,6 +49,10 @@ services:
       # 扫完存在 ./data 里，wr_skey 过期还能用 wr_rt 自动续期。
       WEREAD_COOKIE: ${WEREAD_COOKIE:-}
       WEREAD_AUTO_RENEW: ${WEREAD_AUTO_RENEW:-true}    # wr_skey 过期自动用 wr_rt 续期
+      # 登录态守护：后台定期探活 + 主动续期，别等采集撞上失效才补救。
+      # 续不回来（wr_rt 也死了）会发 webhook 报警，管理页挂红条提示重新扫码。
+      WEREAD_KEEPALIVE: ${WEREAD_KEEPALIVE:-true}
+      WEREAD_KEEPALIVE_INTERVAL: ${WEREAD_KEEPALIVE_INTERVAL:-21600}   # 检查间隔（秒），默认 6 小时
       WEREAD_APP_API: ${WEREAD_APP_API:-true}          # App 域接口（多一个「搜公众号」能力）
       WEREAD_AUTO_ADD_SHELF: ${WEREAD_AUTO_ADD_SHELF:-true}
       WEREAD_CONTENT_INTERVAL: ${WEREAD_CONTENT_INTERVAL:-2}

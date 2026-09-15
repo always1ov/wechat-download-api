@@ -81,8 +81,11 @@ async def lifespan(app: FastAPI):
     _skip_bg = os.getenv("SKIP_BACKGROUND_TASKS", "").lower() in ("1", "true", "yes")
     if not _skip_bg:
         await rss_poller.start()
+        # 登录态守护：定期探活 + 主动续期，别等轮询撞上 -2012 才补救
+        from utils.weread_keeper import weread_keeper
+        await weread_keeper.start()
     else:
-        logger.warning("SKIP_BACKGROUND_TASKS 已开 → 轮询器/登录提醒未启动（仅本地测试用）")
+        logger.warning("SKIP_BACKGROUND_TASKS 已开 → 轮询器/登录守护未启动（仅本地测试用）")
 
     # [2026-07-05] MCP streamable-http session manager 随主 app 生命周期运行（否则 /mcp 请求 500）
     from contextlib import AsyncExitStack
@@ -96,6 +99,8 @@ async def lifespan(app: FastAPI):
 
     if not _skip_bg:
         await rss_poller.stop()
+        from utils.weread_keeper import weread_keeper
+        await weread_keeper.stop()
 
 
 app = FastAPI(

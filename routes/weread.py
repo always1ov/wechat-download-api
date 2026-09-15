@@ -85,7 +85,10 @@ async def weread_status():
     - `auto_renew`: wr_skey 过期是否自动用 wr_rt 续期
     - `app_api`: App 域（i.weread.qq.com）当前是否可用
     - `auto_add_to_shelf`: 采集前是否自动把公众号加入书架
+    - `keepalive`: 登录态守护的状态（上次检查/续期时间、是否需要重新扫码等）
     """
+    from utils.weread_keeper import weread_keeper
+
     info = weread_auth.get_info()
     info.update({
         "auto_renew": weread_client.auto_renew(),
@@ -94,8 +97,24 @@ async def weread_status():
         "content_interval": weread_client.content_interval(),
         "page_interval": weread_client.page_interval(),
         "max_pages": weread_client.max_pages(),
+        "keepalive": weread_keeper.status(),
     })
     return WereadResponse(success=True, data=info)
+
+
+@router.post("/weread/keepalive/check", response_model=WereadResponse,
+             summary="立刻跑一次登录态守护检查")
+async def weread_keepalive_check():
+    """不等下一轮，马上查一次登录态；坏了就当场续期。
+
+    返回的就是 `/api/weread/status` 里那个 `keepalive` 结构。
+    """
+    from utils.weread_keeper import weread_keeper
+
+    data = await weread_keeper.check_once()
+    return WereadResponse(success=bool(data.get("last_check_ok")),
+                          data=data,
+                          error=None if data.get("last_check_ok") else data.get("message"))
 
 
 @router.post("/weread/qrcode", response_model=WereadResponse, summary="获取微信读书登录二维码")
