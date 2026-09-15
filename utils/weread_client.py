@@ -1230,12 +1230,21 @@ class WereadClient:
             for _ in range(max_pages()):
                 payload = await self.get_articles_page(book_id, offset=page_offset)
                 page_articles, group_count = parse_mp_articles(payload, book_id)
+                added = 0
                 for item in page_articles:
                     if item["review_id"] in seen:
                         continue
                     seen.add(item["review_id"])
                     articles.append(item)
+                    added += 1
                 if group_count == 0 or len(articles) >= limit:
+                    break
+                if added == 0:
+                    # 这一页全是见过的：要么到底了，要么这个号的 offset 不按预期推进。
+                    # 再翻下去只会拿到同样的东西，白白多打 WEREAD_MAX_PAGES-1 次接口 ——
+                    # 订阅号一多，每轮就是几十上百个无用请求，纯粹给风控送素材。
+                    logger.debug("[WeRead] %s 本页没有新文章，停止翻页",
+                                 nickname or book_id)
                     break
                 # offset 按顶层分组数累加，不是按文章条数
                 page_offset += group_count

@@ -214,3 +214,49 @@ def test_is_enabled_follows_cookie_and_override(tmp_path, monkeypatch):
     monkeypatch.setenv("WEREAD_ENABLED", "false")
     assert wc.is_enabled() is False
 
+
+
+# ── 翻页：别在没有新文章时继续空转 ──────────────────────────
+
+async def test_pagination_stops_when_page_has_nothing_new(monkeypatch):
+    """一页全是见过的文章就停。
+
+    真实接口里 offset 会推进到尽头返回空，但只要某个号的 offset 不按预期推进
+    （或接口忽略 offset），原来的循环就会把 WEREAD_MAX_PAGES 页全打满，
+    每轮、每个订阅号都白发一堆请求。
+    """
+    import httpx
+    from utils import weread_client as wc
+
+    monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=k")
+    monkeypatch.setenv("WEREAD_PAGE_INTERVAL", "0")
+    monkeypatch.setenv("WEREAD_MAX_PAGES", "5")
+    monkeypatch.setenv("WEREAD_AUTO_ADD_SHELF", "false")
+    wc.reset_shelf_cache()
+
+    book_id = "MP_WXS_3296382112"
+    calls = {"n": 0}
+
+    def handler(request):
+        if request.url.path == "/web/mp/articles":
+            calls["n"] += 1
+            # 不管 offset 是多少，永远返回同一篇 —— 模拟 offset 不推进
+            return httpx.Response(200, json={"reviews": [{"review": {
+                "reviewId": f"{book_id}_tok1",
+                "mpInfo": {"title": "只有这一篇", "publishTime": 1757000000,
+                           "cover": "", "mpName": "某号"},
+            }}]})
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(
+        wc.WereadClient, "_new_client",
+        lambda self: httpx.AsyncClient(transport=httpx.MockTransport(handler),
+                                       follow_redirects=True),
+    )
+
+    async with wc.WereadClient() as client:
+        articles = await client.list_articles("MzI5NjM4MjExMg==", limit=10)
+
+    assert len(articles) == 1
+    assert calls["n"] == 2, (
+        f"应该第二页发现没有新文章就停（共 2 次请求），实际打了 {calls['n']} 次")
