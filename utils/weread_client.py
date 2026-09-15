@@ -63,8 +63,14 @@ APP_USER_AGENT = (
     "(Linux; U; Android 14; V2171A Build/UP1A.231005.007)"
 )
 
-COOKIE_MISSING_MSG = "未配置微信读书 Cookie，请在管理页面配置或设置 WEREAD_COOKIE 环境变量"
-COOKIE_EXPIRED_MSG = "微信读书登录已过期，请到管理页面重新配置微信读书 Cookie"
+COOKIE_MISSING_MSG = "还没登录微信读书，请打开 /login.html 扫码登录（或设置 WEREAD_COOKIE 环境变量）"
+# 两种「过期」要分开说：没有 wr_rt 是压根续不了，跟续了但没续回来是两回事，
+# 前者用户再等也不会自愈，得知道必须重新扫码。
+COOKIE_EXPIRED_MSG = "微信读书登录已过期，自动续期没能救回来，请打开 /login.html 重新扫码"
+COOKIE_NO_REFRESH_MSG = (
+    "微信读书登录已过期，而且当前登录态里没有 wr_rt（长期令牌），"
+    "无法自动续期 —— 请打开 /login.html 重新扫码登录"
+)
 
 # 文章短链 token 里的 '~' 是合法字符（如 4OcS7~rrtk2Lwe4P0YPiGg），
 # 转义成 %7E 会让微信 302 跳转、部分阅读器打不开，必须原样保留。
@@ -175,7 +181,8 @@ class WereadError(Exception):
         if self.code == "missing_cookie":
             return COOKIE_MISSING_MSG
         if self.code in AUTH_ERROR_CODES:
-            return COOKIE_EXPIRED_MSG
+            # 没有 wr_rt 时再怎么等也不会自愈，直接说清楚，别让用户干等
+            return COOKIE_EXPIRED_MSG if weread_auth.has_refresh_token() else COOKIE_NO_REFRESH_MSG
         # 字符串 code 是本地判定出来的问题（缺字段、解析不出正文等），
         # message 本身就是完整的中文说明，再套一层「接口失败」反而绕。
         # network_error 例外：它的 message 是原始异常文本，需要前缀点题。
@@ -391,6 +398,14 @@ class WereadAuth:
         self._cache = payload
         self._last_loaded_at = time.time()
 
+    def has_refresh_token(self) -> bool:
+        """当前登录态里有没有 wr_rt（长期 refreshToken）。
+
+        没有它，wr_skey 一过期就只能重新扫码 —— 自动维护在这种情况下
+        无论如何都救不回来，属于配置问题而不是故障。
+        """
+        return bool(parse_cookie(self.get_cookie()).get("wr_rt"))
+
     def is_env_managed(self) -> bool:
         return bool(self.normalize_cookie(os.getenv("WEREAD_COOKIE", "")))
 
@@ -447,6 +462,9 @@ class WereadAuth:
             "enabled": is_enabled(),
             "env_managed": self.is_env_managed(),
             "vid": self.extract_vid(cookie),
+            # 没有它就没法自动续期，这是「维持不住」最常见的根因，
+            # 得让前端在还没坏的时候就能提醒用户
+            "has_wr_rt": self.has_refresh_token(),
             "cookie_preview": (cookie[:12] + "..." + cookie[-6:]) if len(cookie) > 24 else ("***" if cookie else ""),
             "updated_at": int(stored.get("updated_at", 0) or 0),
         }

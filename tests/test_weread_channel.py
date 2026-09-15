@@ -267,7 +267,9 @@ async def test_verify_reports_expired_cookie(monkeypatch):
         ok, message = await client.verify()
 
     assert ok is False
-    assert message == wc.COOKIE_EXPIRED_MSG
+    # 这个 fixture 的 Cookie 只有 wr_vid/wr_skey，没有 wr_rt ——
+    # 提示要点明「续不了，必须重新扫码」，而不是笼统一句「已过期」
+    assert message == wc.COOKIE_NO_REFRESH_MSG
 
 
 async def test_request_requires_cookie(monkeypatch):

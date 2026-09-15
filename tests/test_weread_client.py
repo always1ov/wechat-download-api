@@ -131,7 +131,8 @@ def test_parse_mp_articles_flags_auth_errors_as_non_retriable(code):
     assert exc.value.code == code
     assert exc.value.retriable is False
     assert exc.value.is_auth_error
-    assert exc.value.user_message == wc.COOKIE_EXPIRED_MSG
+    # 这个用例没配 Cookie，也就没有 wr_rt —— 提示要说清「续不了，得重新扫码」
+    assert exc.value.user_message == wc.COOKIE_NO_REFRESH_MSG
 
 
 def test_parse_mp_articles_other_errors_stay_retriable():
@@ -260,3 +261,39 @@ async def test_pagination_stops_when_page_has_nothing_new(monkeypatch):
     assert len(articles) == 1
     assert calls["n"] == 2, (
         f"应该第二页发现没有新文章就停（共 2 次请求），实际打了 {calls['n']} 次")
+
+
+
+def test_expired_message_depends_on_whether_wr_rt_exists(monkeypatch, tmp_path):
+    """有 wr_rt 和没有 wr_rt，是两种不同的处境，提示不能混为一谈。
+
+    没有 wr_rt 时自动维护永远救不回来，用户得知道必须重新扫码，
+    而不是看着「登录已过期」干等系统自愈。
+    """
+    monkeypatch.setattr(wc.weread_auth, "credentials_file", tmp_path / ".weread.json")
+    wc.weread_auth._runtime_cookie = ""
+
+    monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=k")      # 没有 wr_rt
+    err = wc.WereadError(-2012, "login timeout")
+    assert err.user_message == wc.COOKIE_NO_REFRESH_MSG
+    assert "wr_rt" in err.user_message
+
+    monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=k; wr_rt=tok")
+    assert wc.WereadError(-2012, "login timeout").user_message == wc.COOKIE_EXPIRED_MSG
+
+    wc.weread_auth._runtime_cookie = ""
+
+
+def test_has_refresh_token_reflects_cookie(monkeypatch, tmp_path):
+    monkeypatch.setattr(wc.weread_auth, "credentials_file", tmp_path / ".weread.json")
+    wc.weread_auth._runtime_cookie = ""
+
+    monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=k")
+    assert wc.weread_auth.has_refresh_token() is False
+    assert wc.weread_auth.get_info()["has_wr_rt"] is False
+
+    monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=k; wr_rt=tok")
+    assert wc.weread_auth.has_refresh_token() is True
+    assert wc.weread_auth.get_info()["has_wr_rt"] is True
+
+    wc.weread_auth._runtime_cookie = ""

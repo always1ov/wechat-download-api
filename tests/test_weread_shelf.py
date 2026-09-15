@@ -237,4 +237,4 @@ def test_shelf_endpoint_without_cookie(client, monkeypatch):
     monkeypatch.delenv("WEREAD_COOKIE", raising=False)
     body = client.get("/api/weread/shelf/accounts").json()
     assert body["success"] is False
-    assert "未配置" in body["error"]
+    assert body["error"] == wc.COOKIE_MISSING_MSG

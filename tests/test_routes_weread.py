@@ -81,7 +81,7 @@ def test_articles_without_login_explains_what_to_do(client, monkeypatch):
 
     body = client.get("/api/public/articles", params={"fakeid": FAKEID}).json()
     assert body["success"] is False
-    assert "未配置" in body["error"]
+    assert body["error"] == wc.COOKIE_MISSING_MSG
 
 
 def test_articles_keyword_filters_weread_results(client, monkeypatch):
@@ -142,7 +142,7 @@ def test_article_requires_login(client, monkeypatch):
     body = client.post("/api/article",
                        json={"url": "https://mp.weixin.qq.com/s/tok1"}).json()
     assert body["success"] is False
-    assert "未配置" in body["error"]
+    assert body["error"] == wc.COOKIE_MISSING_MSG
 
 
 # ── /api/weread/* ────────────────────────────────────────
@@ -214,7 +214,7 @@ def test_weread_renew_requires_cookie(client, monkeypatch):
     monkeypatch.delenv("WEREAD_COOKIE", raising=False)
     body = client.post("/api/weread/renew").json()
     assert body["success"] is False
-    assert "未配置" in body["error"]
+    assert body["error"] == wc.COOKIE_MISSING_MSG
 
 
 def test_weread_renew_reports_missing_wr_rt(client, monkeypatch):

@@ -716,6 +716,16 @@
                     detailEl.textContent += ' · 自动维护已关闭';
                     return;
                 }
+                // 没有 wr_rt 是「维持不住」最常见的根因：自动续期压根没法工作。
+                // 这时登录态可能还没过期，但迟早会过期且救不回来，得提前说。
+                if (!d.data.has_wr_rt && d.data.configured) {
+                    document.getElementById('keepAlertText').textContent =
+                        '当前微信读书登录态里没有 wr_rt（长期令牌），自动续期无法工作 —— ' +
+                        'wr_skey 一过期（约 1.5 小时）就会掉线且救不回来。请重新扫码登录。';
+                    alertBox.hidden = false;
+                    detailEl.textContent += ' · 无法自动续期';
+                    return;
+                }
                 if (k.needs_relogin) {
                     document.getElementById('keepAlertText').textContent =
                         '微信读书登录态已失效，自动续期也救不回来了' +
