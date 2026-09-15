@@ -259,3 +259,28 @@ def test_weread_diagnose_without_cookie(client, monkeypatch):
     body = client.get("/api/weread/diagnose").json()
     assert body["success"] is False
     assert body["data"]["steps"][0]["ok"] is False
+
+
+# ── 退出登录：前端要靠 message 解释为什么退不掉 ────────────────
+
+def test_logout_env_managed_explains_why_it_failed(client, monkeypatch):
+    """WEREAD_COOKIE 托管时退不掉，必须说清楚原因。
+
+    前端以前只显示干巴巴一句「退出失败」，用户完全不知道该改环境变量；
+    现在它读 message，所以这里把契约钉住：失败也必须带可读的 message。
+    """
+    monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=test")
+
+    body = client.post("/api/admin/logout").json()
+
+    assert body["success"] is False
+    assert "WEREAD_COOKIE" in body["message"]
+
+
+def test_logout_without_env_cookie_succeeds_with_message(client, monkeypatch):
+    monkeypatch.delenv("WEREAD_COOKIE", raising=False)
+
+    body = client.post("/api/admin/logout").json()
+
+    assert body["success"] is True
+    assert body["message"]

@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231890ff'/%3E%3Cpath d='M4 6h8M4 9h8M4 12h5' stroke='white' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
     <title>WeChat Download API</title>
     <style>
         :root {
@@ -688,11 +689,14 @@
                 var res = await fetch('/api/admin/logout', { method: 'POST' });
                 var data = await res.json();
 
-                if (data.success) {
-                    await checkStatus();
-                } else {
-                    val.textContent = '退出失败';
-                    actions.innerHTML = '<button class="btn-sm" onclick="checkStatus()">刷新</button>';
+                // 不管成没成，都重新查一次状态 —— 失败时详情行如果还停在
+                // 「登录正常」，跟「退出失败」自相矛盾
+                await checkStatus();
+                if (!data.success) {
+                    // 这个接口把原因放在 message 里（环境变量托管时清不掉），
+                    // 以前只显示干巴巴一句「退出失败」，等于把原因扔了
+                    var why = data.message || data.error || '退出失败';
+                    document.getElementById('statusDetail').textContent = why;
                 }
             } catch (e) {
                 val.textContent = '退出失败: ' + e.message;

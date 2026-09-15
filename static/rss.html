@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231890ff'/%3E%3Cpath d='M4 6h8M4 9h8M4 12h5' stroke='white' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E">
     <title>RSS 订阅管理 - WeChat Download API</title>
     <style>
         :root {
@@ -926,7 +927,37 @@
             dlState.days = parseInt(btn.getAttribute('data-days'), 10) || 0;
         }
 
-        function doDownload(ext) {
+        // 用 fetch + blob 下载，不要 window.location.href：
+        // 导出失败时后端回的是 JSON（比如 404 {"detail":"未订阅该公众号"}），
+        // 直接跳转会把用户甩到一个满屏 JSON 的白页上，页面状态全丢。
+        async function downloadUrl(url, fallbackName) {
+            try {
+                var res = await fetch(url);
+                if (!res.ok) {
+                    var why = '';
+                    try { var j = await res.json(); why = j.detail || j.error || j.message || ''; }
+                    catch (e) { why = 'HTTP ' + res.status; }
+                    showToast('下载失败: ' + (why || ('HTTP ' + res.status)));
+                    return;
+                }
+                // 文件名优先用后端 Content-Disposition 里的（带中文，RFC 5987 编码）
+                var name = fallbackName;
+                var cd = res.headers.get('Content-Disposition') || '';
+                var m = cd.match(/filename\*=UTF-8''([^;]+)/i) || cd.match(/filename="?([^";]+)"?/i);
+                if (m) { try { name = decodeURIComponent(m[1]); } catch (e) { name = m[1]; } }
+
+                var blob = await res.blob();
+                var href = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = href; a.download = name;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(function () { URL.revokeObjectURL(href); }, 60000);
+            } catch (e) {
+                showToast('下载失败: ' + e.message);
+            }
+        }
+
+        async function doDownload(ext) {
             if (!dlState.fakeid) return;
             var url = '/api/export/account/' + encodeURIComponent(dlState.fakeid) + '.' + ext;
             if (dlState.days > 0) {
@@ -934,8 +965,8 @@
                 url += '?since=' + since;
             }
             showToast('正在生成，请稍候…');
-            window.location.href = url;  // 附件下载：Content-Disposition 触发下载，不跳转页面
             closeDownload();
+            await downloadUrl(url, 'articles.' + ext);
         }
 
         function toggleExportMenu() {
@@ -943,9 +974,10 @@
             menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
         }
 
-        function doExport(format) {
+        async function doExport(format) {
             document.getElementById('exportMenu').style.display = 'none';
-            window.location.href = '/api/rss/export?format=' + format;
+            await downloadUrl('/api/rss/export?format=' + format,
+                              'wechat_rss_subscriptions.' + format);
         }
 
         document.addEventListener('click', function(e) {
