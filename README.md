@@ -71,6 +71,12 @@
 
 ## Docker 部署 🐳
 
+> **镜像从哪来**：本仓库的 GitHub Actions 会把镜像推到 GHCR（`ghcr.io/always1ov/wechat-download-api`），用内置 `GITHUB_TOKEN`，**不需要配置任何 secret**。
+> 打 `v*` tag 出正式版（amd64 + arm64），推 `claude/**` 分支出开发版（amd64）。
+> ⚠️ **fork 仓库默认关闭 Actions**，需先到 `Settings → Actions → General` 打开，工作流才会跑。
+> 也可以本地构建：`docker build -t wechat-download-api .`
+
+
 **最快速的部署方式**，无需配置 Python 环境，一键启动：
 
 ```bash
