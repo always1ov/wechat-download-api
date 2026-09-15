@@ -65,6 +65,20 @@
         background: transparent; color: var(--text-secondary);
         border: 1px solid var(--border-base); margin-left: 8px;
     }
+    .maint {
+        margin-top: 20px; padding-top: 16px;
+        border-top: 1px solid var(--border-light);
+    }
+    .maint .btn-ghost { margin: 0 4px 8px; font-weight: 400; padding: 6px 14px; }
+    .cookie-tip {
+        font-size: 12px; color: var(--text-muted);
+        text-align: left; line-height: 1.7; margin: 8px 0;
+    }
+    .cookie-row { display: flex; gap: 8px; }
+    .cookie-row input {
+        flex: 1; padding: 8px 12px; font-size: 13px;
+        border: 1px solid var(--border-base); border-radius: var(--radius-base); outline: none;
+    }
     .tips {
         margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-light);
         font-size: 12px; color: var(--text-muted); text-align: left; line-height: 1.8;
@@ -86,6 +100,22 @@
 
     <button class="btn" id="startBtn" onclick="startLogin()">获取二维码</button>
     <a class="btn btn-ghost" href="/admin.html" style="display:inline-block;">返回管理页</a>
+
+    <div class="maint">
+        <button class="btn btn-ghost" onclick="verifyLogin()">校验登录态</button>
+        <button class="btn btn-ghost" onclick="renewLogin()">手动续期</button>
+        <button class="btn btn-ghost" onclick="toggleCookieBox()" id="cookieToggle">手动填 Cookie</button>
+        <div id="cookieBox" hidden>
+            <div class="cookie-tip">
+                浏览器登录 weread.qq.com → F12 → Network → 复制请求头里的完整 Cookie
+                （需含 wr_skey / wr_vid / wr_rt）
+            </div>
+            <div class="cookie-row">
+                <input type="password" id="cookieInput" placeholder="wr_vid=...; wr_skey=...; wr_rt=...">
+                <button class="btn" id="cookieSaveBtn" onclick="saveCookie()">保存</button>
+            </div>
+        </div>
+    </div>
 
     <div class="tips">
         <b>登录之后：</b><br>
@@ -172,6 +202,67 @@
         } catch (e) {
             /* 网络抖动等下一轮，不打断用户 */
         }
+    }
+
+    function toggleCookieBox() {
+        var box = document.getElementById('cookieBox');
+        var btn = document.getElementById('cookieToggle');
+        box.hidden = !box.hidden;
+        btn.textContent = box.hidden ? '手动填 Cookie' : '收起';
+    }
+
+    async function verifyLogin() {
+        setState('校验中...');
+        try {
+            var res = await fetch('/api/weread/verify', { method: 'POST' });
+            var data = await res.json();
+            setState(data.success ? ((data.data && data.data.message) || '登录态有效')
+                                  : (data.error || '校验失败'),
+                     data.success ? 'ok' : 'bad');
+        } catch (e) {
+            setState('请求失败: ' + e.message, 'bad');
+        }
+    }
+
+    async function renewLogin() {
+        setState('续期中...');
+        try {
+            var res = await fetch('/api/weread/renew', { method: 'POST' });
+            var data = await res.json();
+            setState(data.success ? '续期成功，wr_skey 已更新' : (data.error || '续期失败'),
+                     data.success ? 'ok' : 'bad');
+        } catch (e) {
+            setState('请求失败: ' + e.message, 'bad');
+        }
+    }
+
+    async function saveCookie() {
+        var input = document.getElementById('cookieInput');
+        var btn = document.getElementById('cookieSaveBtn');
+        var cookie = input.value.trim();
+        if (!cookie) return;
+        btn.disabled = true;
+        btn.textContent = '保存中...';
+        try {
+            var res = await fetch('/api/weread/cookie', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cookie: cookie })
+            });
+            var data = await res.json();
+            if (data.success) {
+                input.value = '';
+                var d = data.data || {};
+                setState(d.message + '；校验：' + (d.verified ? '有效' : (d.verify_message || '未通过')),
+                         d.verified ? 'ok' : 'bad');
+            } else {
+                setState(data.error || '保存失败', 'bad');
+            }
+        } catch (e) {
+            setState('请求失败: ' + e.message, 'bad');
+        }
+        btn.disabled = false;
+        btn.textContent = '保存';
     }
 
     // 已经登录过就直接提示，省得白扫一次

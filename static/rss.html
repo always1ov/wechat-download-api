@@ -414,6 +414,7 @@
                 <input type="text" id="searchInput" placeholder="输入公众号名称搜索...">
                 <button class="btn btn-primary" id="searchBtn" onclick="doSearch()">搜索</button>
                 <button class="btn-sm" onclick="toggleBatch()">批量添加</button>
+                <button class="btn-sm" onclick="loadShelf()">从微信读书书架导入</button>
             </div>
             <div class="search-results" id="searchResults"></div>
             <div id="batchPanel" style="display:none;margin-top:var(--space-md);">
@@ -679,6 +680,83 @@
                 btnEl.textContent = '订阅';
                 showToast('网络错误: ' + e.message);
             }
+        }
+
+        // 书架导入：渲染进作者既有的 #searchResults，复用 search-item 与 doSubscribe，
+        // 不另起一套列表 UI。想订阅的号先在微信读书 App 里关注，这里就能看到。
+        async function loadShelf() {
+            var panel = document.getElementById('searchResults');
+            panel.className = 'search-results visible';
+            panel.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:var(--font-sm);">正在读取书架...</div>';
+            try {
+                var res = await fetch('/api/weread/shelf/accounts');
+                var d = await res.json();
+                if (!d.success) {
+                    panel.innerHTML = '<div style="padding:16px;text-align:center;color:var(--error-color);font-size:var(--font-sm);">' +
+                        escHtml(d.error || '读取书架失败') + '</div>';
+                    return;
+                }
+                var list = (d.data && d.data.list) || [];
+                if (!list.length) {
+                    panel.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:var(--font-sm);">' +
+                        '书架上没有公众号。先在微信读书 App 里关注几个，再回来点一次。</div>';
+                    return;
+                }
+                var pending = list.filter(function (i) { return !i.subscribed; }).length;
+                var html = '';
+                if (pending > 1) {
+                    html += '<div style="padding:10px 16px;border-bottom:1px solid var(--border-light);display:flex;align-items:center;justify-content:space-between;">' +
+                        '<span style="font-size:var(--font-xs);color:var(--text-muted);">书架上 ' + list.length +
+                        ' 个公众号，' + pending + ' 个未订阅</span>' +
+                        '<button class="btn-sm btn-primary" id="shelfImportAll" onclick="importAllShelf(this)">全部订阅</button></div>';
+                }
+                list.forEach(function (item) {
+                    html += '<div class="search-item">';
+                    html += '<img src="' + (item.round_head_img || '') + '" alt="" onerror="this.style.display=\'none\'">';
+                    html += '<div class="search-item-info">';
+                    html += '<div class="name">' + escHtml(item.nickname || '') + '</div>';
+                    html += '<div class="alias">' + escHtml(item.alias || item.fakeid || '') + '</div>';
+                    html += '</div>';
+                    if (item.subscribed) {
+                        html += '<button class="btn-subscribe subscribed" disabled>已订阅</button>';
+                    } else {
+                        html += '<button class="btn-subscribe" onclick="doSubscribe(this,\'' +
+                            escAttr(item.fakeid) + '\',\'' +
+                            escAttr(item.nickname || '') + '\',\'' +
+                            escAttr(item.alias || '') + '\',\'' +
+                            escAttr(item.round_head_img || '') +
+                            '\')">订阅</button>';
+                    }
+                    html += '</div>';
+                });
+                panel.innerHTML = html;
+            } catch (e) {
+                panel.innerHTML = '<div style="padding:16px;text-align:center;color:var(--error-color);font-size:var(--font-sm);">读取书架失败: ' +
+                    escHtml(e.message) + '</div>';
+            }
+        }
+
+        async function importAllShelf(btnEl) {
+            btnEl.disabled = true;
+            btnEl.textContent = '导入中...';
+            try {
+                var res = await fetch('/api/weread/shelf/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                var d = await res.json();
+                showToast(d.success ? ((d.data && d.data.message) || '导入完成') : (d.error || '导入失败'));
+                if (d.success) {
+                    loadShelf();
+                    loadSubscriptions();
+                    loadStatus();
+                }
+            } catch (e) {
+                showToast('网络错误: ' + e.message);
+            }
+            btnEl.disabled = false;
+            btnEl.textContent = '全部订阅';
         }
 
         function toggleBatch() {

@@ -306,38 +306,6 @@
             grid-column: 1 / -1;
         }
 
-        /* WeRead Section */
-        .weread-section {
-            grid-column: 1 / -1;
-        }
-
-        .weread-status {
-            display: flex;
-            flex-wrap: wrap;
-            gap: var(--space-sm) var(--space-md);
-            margin-bottom: var(--space-md);
-            font-size: var(--font-xs);
-            color: var(--text-secondary);
-        }
-
-        .weread-status .pill {
-            padding: 2px 10px;
-            border-radius: 999px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-light);
-        }
-
-        .weread-status .pill.on { color: var(--success-color); border-color: rgba(82, 196, 26, 0.3); }
-        .weread-status .pill.off { color: var(--text-muted); }
-
-        .weread-actions {
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: var(--space-sm);
-            margin-top: var(--space-sm);
-        }
-
         .btn-ghost {
             background: transparent;
             color: var(--text-secondary);
@@ -348,56 +316,6 @@
         .btn-ghost:hover {
             color: var(--primary-color);
             border-color: var(--primary-color);
-        }
-
-        .weread-hint {
-            font-size: var(--font-xs);
-            color: var(--text-muted);
-        }
-
-        /* 凭证维护：次要操作，和主操作拉开距离 */
-        .weread-maint {
-            margin-top: var(--space-lg);
-            padding-top: var(--space-md);
-            border-top: 1px solid var(--border-light);
-        }
-
-        .weread-maint .btn-ghost { font-weight: 400; }
-
-        .weread-qr {
-            display: none;
-            margin-top: var(--space-md);
-            padding: var(--space-md);
-            border: 1px solid var(--border-light);
-            border-radius: var(--radius-base);
-            background: var(--bg-secondary);
-            text-align: center;
-        }
-
-        .weread-qr.visible { display: block; }
-
-        .weread-qr img {
-            width: 200px;
-            height: 200px;
-            image-rendering: pixelated;
-            background: #fff;
-            padding: var(--space-sm);
-            border-radius: var(--radius-small);
-        }
-
-        .weread-qr .qr-state {
-            margin-top: var(--space-sm);
-            font-size: var(--font-sm);
-            color: var(--text-secondary);
-        }
-
-        .weread-qr .qr-state.ok { color: var(--success-color); font-weight: 600; }
-        .weread-qr .qr-state.bad { color: var(--error-color); }
-
-        .weread-divider {
-            margin: var(--space-md) 0 var(--space-sm);
-            font-size: var(--font-xs);
-            color: var(--text-muted);
         }
 
         .test-input-group {
@@ -616,12 +534,12 @@
                 </div>
                 <ul class="nav-list">
                     <li><a href="/login.html"><span>① 扫码登录微信读书</span><span class="arrow">&#8250;</span></a></li>
-                    <li><a href="#wereadCard" onclick="document.querySelector('.weread-section').scrollIntoView({behavior:'smooth'});return false;"><span>② 从书架导入公众号</span><span class="arrow">&#8250;</span></a></li>
+                    <li><a href="/rss.html"><span>② 从书架导入公众号</span><span class="arrow">&#8250;</span></a></li>
                     <li><a href="/rss.html"><span>③ RSS 订阅管理</span><span class="arrow">&#8250;</span></a></li>
                 </ul>
             </div>
 
-            <!-- API Docs -->
+            <!-- Content -->
             <div class="card">
                 <div class="card-header">
                     <div class="card-icon green">
@@ -634,13 +552,14 @@
                         </svg>
                     </div>
                     <div>
-                        <div class="card-title">接口文档</div>
-                        <div class="card-desc">在线调试 API</div>
+                        <div class="card-title">内容管理</div>
+                        <div class="card-desc">分类 · 黑名单 · 历史</div>
                     </div>
                 </div>
                 <ul class="nav-list">
-                    <li><a href="/api/docs" target="_blank"><span>Swagger UI</span><span class="arrow">&#8250;</span></a></li>
-                    <li><a href="/api/redoc" target="_blank"><span>ReDoc</span><span class="arrow">&#8250;</span></a></li>
+                    <li><a href="/categories.html"><span>分类管理</span><span class="arrow">&#8250;</span></a></li>
+                    <li><a href="/blacklist.html"><span>黑名单管理</span><span class="arrow">&#8250;</span></a></li>
+                    <li><a href="/history.html"><span>历史文章</span><span class="arrow">&#8250;</span></a></li>
                 </ul>
             </div>
 
@@ -656,88 +575,16 @@
                     </div>
                     <div>
                         <div class="card-title">系统</div>
-                        <div class="card-desc">监控与调试</div>
+                        <div class="card-desc">监控 · 诊断 · 接口文档</div>
                     </div>
                 </div>
                 <ul class="nav-list">
                     <li><a href="/api/weread/diagnose" target="_blank"><span>通道诊断</span><span class="arrow">&#8250;</span></a></li>
                     <li><a href="/api/health" target="_blank"><span>健康检查</span><span class="arrow">&#8250;</span></a></li>
                     <li><a href="/api/stats" target="_blank"><span>限频统计</span><span class="arrow">&#8250;</span></a></li>
+                    <li><a href="/api/docs" target="_blank"><span>Swagger UI</span><span class="arrow">&#8250;</span></a></li>
+                    <li><a href="/api/redoc" target="_blank"><span>ReDoc</span><span class="arrow">&#8250;</span></a></li>
                 </ul>
-            </div>
-
-            <!-- Advanced -->
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-icon blue">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="3"/>
-                            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
-                        </svg>
-                    </div>
-                    <div>
-                        <div class="card-title">高级功能</div>
-                        <div class="card-desc">分类与黑名单管理</div>
-                    </div>
-                </div>
-                <ul class="nav-list">
-                    <li><a href="/categories.html"><span>分类管理</span><span class="arrow">&#8250;</span></a></li>
-                    <li><a href="/blacklist.html"><span>黑名单管理</span><span class="arrow">&#8250;</span></a></li>
-                    <li><a href="/history.html"><span>历史文章</span><span class="arrow">&#8250;</span></a></li>
-                </ul>
-            </div>
-
-            <!-- WeRead channel -->
-            <div class="card weread-section">
-                <div class="card-header">
-                    <div class="card-icon green">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-                            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-                        </svg>
-                    </div>
-                    <div>
-                        <div class="card-title">微信读书</div>
-                        <div class="card-desc">本服务唯一的数据源。登录请走 <a href="/login.html">扫码页</a>，这里管公众号来源和凭证维护</div>
-                    </div>
-                </div>
-                <div class="weread-status" id="wereadStatus">检查中...</div>
-
-                <!-- 主操作：把书架上的号变成订阅 -->
-                <div class="weread-actions">
-                    <button class="btn btn-primary" onclick="loadWereadShelf()">从书架导入公众号</button>
-                    <span class="weread-hint">先在微信读书 App 里关注公众号，这里一键变成 RSS 订阅</span>
-                </div>
-                <div class="weread-qr" id="wereadShelfPanel" style="text-align:left;">
-                    <div id="wereadShelfList"></div>
-                    <div style="margin-top:12px;">
-                        <button class="btn btn-primary" id="wereadImportBtn" onclick="importWereadShelf()">全部导入并立即拉取</button>
-                    </div>
-                </div>
-
-                <!-- 凭证维护：平时不用管，出问题时才点 -->
-                <div class="weread-actions weread-maint">
-                    <button class="btn btn-ghost" onclick="verifyWereadCookie()">校验登录态</button>
-                    <button class="btn btn-ghost" onclick="renewWereadCookie()">手动续期</button>
-                    <button class="btn btn-ghost" onclick="toggleWereadCookie()" id="wereadCookieToggle">手动填 Cookie</button>
-                    <button class="btn btn-ghost" onclick="clearWereadCookie()">退出登录</button>
-                </div>
-                <div id="wereadCookieBox" hidden>
-                    <div class="weread-divider">
-                        一般不用填 —— <a href="/login.html">扫码登录</a>更省事。
-                        手动取法：浏览器登录 weread.qq.com → F12 → Network → 复制请求头里的完整 Cookie
-                    </div>
-                    <div class="test-input-group">
-                        <input type="password" id="wereadCookie" placeholder="wr_vid=...; wr_skey=...; wr_rt=...">
-                        <button class="btn btn-primary" id="wereadSaveBtn" onclick="saveWereadCookie()">保存</button>
-                    </div>
-                </div>
-                <div class="result-panel" id="wereadResult">
-                    <div class="result-header">
-                        <span class="tag" id="wereadTag"></span>
-                    </div>
-                    <div class="result-body" id="wereadBody"></div>
-                </div>
             </div>
 
             <!-- Test -->
@@ -925,176 +772,11 @@
             btn.textContent = '获取文章';
         }
 
-        function wereadFeedback(ok, message) {
-            var panel = document.getElementById('wereadResult');
-            var tag = document.getElementById('wereadTag');
-            var body = document.getElementById('wereadBody');
-            panel.className = 'result-panel visible';
-            tag.className = ok ? 'tag success' : 'tag error';
-            tag.textContent = ok ? '成功' : '失败';
-            body.textContent = message;
-        }
-
-        async function loadWereadStatus() {
-            var el = document.getElementById('wereadStatus');
-            try {
-                var res = await fetch('/api/weread/status');
-                var data = await res.json();
-                if (!data.success) {
-                    el.textContent = '状态获取失败: ' + (data.error || '未知错误');
-                    return;
-                }
-                var d = data.data;
-                var pills = [
-                    ['登录态', d.configured ? '已登录' : '未登录', d.configured],
-                    ['自动续期', d.auto_renew === false ? '已关闭' : '开启', d.auto_renew !== false],
-                    ['自动加入书架', d.auto_add_to_shelf ? '是' : '否', d.auto_add_to_shelf]
-                ];
-                if (d.vid) pills.push(['wr_vid', d.vid, true]);
-                if (d.env_managed) pills.push(['来源', 'WEREAD_COOKIE 环境变量（管理页写入不生效）', true]);
-
-                el.innerHTML = '';
-                pills.forEach(function (p) {
-                    el.innerHTML += '<span class="pill ' + (p[2] ? 'on' : 'off') + '">' + p[0] + '：' + p[1] + '</span>';
-                });
-            } catch (e) {
-                el.textContent = '状态获取失败: ' + e.message;
-            }
-        }
-
-        async function saveWereadCookie() {
-            var input = document.getElementById('wereadCookie');
-            var btn = document.getElementById('wereadSaveBtn');
-            var cookie = input.value.trim();
-            if (!cookie) return;
-
-            btn.disabled = true;
-            btn.textContent = '保存中...';
-            try {
-                var res = await fetch('/api/weread/cookie', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ cookie: cookie })
-                });
-                var data = await res.json();
-                if (data.success) {
-                    input.value = '';
-                    var d = data.data || {};
-                    wereadFeedback(true, d.message + '\n校验结果: ' + (d.verified ? '有效' : (d.verify_message || '未通过')));
-                } else {
-                    wereadFeedback(false, data.error || '保存失败');
-                }
-            } catch (e) {
-                wereadFeedback(false, '请求失败: ' + e.message);
-            }
-            btn.disabled = false;
-            btn.textContent = '保存';
-            loadWereadStatus();
-        }
-
-        async function verifyWereadCookie() {
-            try {
-                var res = await fetch('/api/weread/verify', { method: 'POST' });
-                var data = await res.json();
-                wereadFeedback(data.success, data.success ? (data.data || {}).message : (data.error || '校验失败'));
-            } catch (e) {
-                wereadFeedback(false, '请求失败: ' + e.message);
-            }
-        }
-
-        async function clearWereadCookie() {
-            if (!confirm('确定清除微信读书登录态？清除后将无法采集任何文章。')) return;
-            try {
-                var res = await fetch('/api/weread/cookie', { method: 'DELETE' });
-                var data = await res.json();
-                wereadFeedback(data.success, data.success ? '已清除' : (data.error || '清除失败'));
-            } catch (e) {
-                wereadFeedback(false, '请求失败: ' + e.message);
-            }
-            loadWereadStatus();
-        }
-
-        function toggleWereadCookie() {
-            var box = document.getElementById('wereadCookieBox');
-            var btn = document.getElementById('wereadCookieToggle');
-            box.hidden = !box.hidden;
-            btn.textContent = box.hidden ? '手动填 Cookie' : '收起';
-        }
-
-        async function loadWereadShelf() {
-            var panel = document.getElementById('wereadShelfPanel');
-            var list = document.getElementById('wereadShelfList');
-            panel.className = 'weread-qr visible';
-            list.textContent = '正在读取书架...';
-            try {
-                var res = await fetch('/api/weread/shelf/accounts');
-                var data = await res.json();
-                if (!data.success) {
-                    list.textContent = data.error || '读取书架失败';
-                    return;
-                }
-                var accounts = data.data.list || [];
-                if (!accounts.length) {
-                    list.textContent = '书架上没有公众号。先在微信读书 App 里关注几个公众号，再回来点这里。';
-                    return;
-                }
-                list.innerHTML = accounts.map(function (a) {
-                    return '<div style="padding:4px 0;font-size:13px;">'
-                        + (a.subscribed ? '✅ ' : '▫️ ')
-                        + '<b>' + (a.nickname || a.fakeid) + '</b>'
-                        + (a.subscribed ? ' <span style="color:#8c8c8c;">已订阅</span>' : '')
-                        + '</div>';
-                }).join('');
-            } catch (e) {
-                list.textContent = '请求失败: ' + e.message;
-            }
-        }
-
-        async function importWereadShelf() {
-            var btn = document.getElementById('wereadImportBtn');
-            btn.disabled = true;
-            btn.textContent = '导入中...';
-            try {
-                var res = await fetch('/api/weread/shelf/import', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({})
-                });
-                var data = await res.json();
-                wereadFeedback(data.success,
-                    data.success ? (data.data.message || '导入完成') : (data.error || '导入失败'));
-                if (data.success) loadWereadShelf();
-            } catch (e) {
-                wereadFeedback(false, '请求失败: ' + e.message);
-            }
-            btn.disabled = false;
-            btn.textContent = '全部导入并立即拉取';
-        }
-
-        async function renewWereadCookie() {
-            try {
-                var res = await fetch('/api/weread/renew', { method: 'POST' });
-                var data = await res.json();
-                wereadFeedback(data.success,
-                    data.success ? '续期成功，wr_skey 已更新' : (data.error || '续期失败'));
-            } catch (e) {
-                wereadFeedback(false, '请求失败: ' + e.message);
-            }
-            loadWereadStatus();
-        }
-
         document.getElementById('testUrl').addEventListener('keydown', function (e) {
             if (e.key === 'Enter') testArticle();
         });
 
-        document.getElementById('wereadCookie').addEventListener('keydown', function (e) {
-            if (e.key === 'Enter') saveWereadCookie();
-        });
-
-        window.addEventListener('load', function () {
-            checkStatus();
-            loadWereadStatus();
-        });
+        window.addEventListener('load', checkStatus);
     </script>
 </body>
 </html>
