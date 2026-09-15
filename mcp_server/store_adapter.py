@@ -40,9 +40,11 @@ class StoreAdapter:
         """搜公众号。走微信读书（App 域搜索 + 书架匹配），不依赖公众号后台。"""
         from routes.search import searchbiz_raw
 
-        accounts, err = await searchbiz_raw(query)
+        accounts, err, hint = await searchbiz_raw(query)
         if err:
             raise RuntimeError(err)
+        if not accounts and hint:
+            raise RuntimeError(hint)
         return [{
             "fakeid": a.get("fakeid", ""),
             "nickname": a.get("nickname", ""),
@@ -59,7 +61,7 @@ class StoreAdapter:
         nickname = ""
         try:
             from routes.search import searchbiz_raw
-            accounts, _ = await searchbiz_raw(fakeid)
+            accounts, _, _ = await searchbiz_raw(fakeid)
             for a in accounts:
                 if a.get("fakeid") == fakeid:
                     nickname = a.get("nickname", "")

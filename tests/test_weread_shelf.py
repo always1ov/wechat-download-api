@@ -112,9 +112,10 @@ async def test_search_falls_back_to_shelf_when_store_search_dead(monkeypatch):
 
     install(monkeypatch, handler)
 
-    accounts, err = await search_mod.searchbiz_raw("另一个")
+    accounts, err, hint = await search_mod.searchbiz_raw("另一个")
 
     assert err is None
+    assert hint == ""
     assert [a["nickname"] for a in accounts] == ["另一个号"]
 
 
@@ -127,9 +128,50 @@ async def test_shelf_search_matches_nothing_returns_empty(monkeypatch):
 
     install(monkeypatch, handler)
 
-    accounts, err = await search_mod.searchbiz_raw("压根不存在的号")
+    accounts, err, hint = await search_mod.searchbiz_raw("压根不存在的号")
     assert accounts == []
     assert err is None
+    # 空结果不能只回一句「未找到」—— 得说清楚书架上有几个、下一步干嘛
+    assert "压根不存在的号" in hint
+    assert "微信读书 App" in hint
+    assert "2" in hint  # 书架上现有 2 个号
+
+
+async def test_empty_shelf_hint_says_shelf_is_empty(monkeypatch):
+    """书架本身是空的，提示要和「书架有号但没匹配上」区分开。"""
+
+    def handler(request):
+        if request.url.path == "/store/search":
+            return httpx.Response(401, text="unauthorized")
+        if request.url.path == "/web/shelf/sync":
+            return httpx.Response(200, json={"synckey": 1, "books": []})
+        return shelf_handler(request)
+
+    install(monkeypatch, handler)
+
+    accounts, err, hint = await search_mod.searchbiz_raw("新智元")
+    assert accounts == []
+    assert err is None
+    assert "书架是空的" in hint
+    assert "新智元" in hint
+
+
+async def test_auth_error_is_reported_as_error_not_hint(monkeypatch):
+    """登录态失效是真失败，不能被「去 App 关注一下」这种提示糊弄过去。"""
+
+    def handler(request):
+        if request.url.path == "/store/search":
+            return httpx.Response(200, json={"errcode": -2012, "errmsg": "sign err"})
+        if request.url.path == "/web/shelf/sync":
+            return httpx.Response(200, json={"errcode": -2012, "errmsg": "sign err"})
+        return shelf_handler(request)
+
+    install(monkeypatch, handler)
+
+    accounts, err, hint = await search_mod.searchbiz_raw("新智元")
+    assert accounts == []
+    assert err  # 给出的是失效原因，不是「去关注」
+    assert hint == ""
 
 
 # ── 接口 ──────────────────────────────────────────────────

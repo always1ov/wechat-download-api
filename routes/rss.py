@@ -168,11 +168,11 @@ async def batch_subscribe(req: BatchSubscribeRequest, request: Request,
     subscribed, needs_confirm, failed = [], [], []
 
     for i, line in enumerate(lines):
-        cands, err = await searchbiz_raw(line, base_url)
+        cands, err, hint = await searchbiz_raw(line, base_url)
         if err:
             failed.append({"input": line, "reason": err})
         elif not cands:
-            failed.append({"input": line, "reason": "没搜到该公众号"})
+            failed.append({"input": line, "reason": hint or "没搜到该公众号"})
         elif len(cands) == 1:
             c = cands[0]
             if c["fakeid"] in subscribed_fakeids:

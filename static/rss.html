@@ -622,9 +622,19 @@
             try {
                 var res = await fetch('/api/public/searchbiz?query=' + encodeURIComponent(q));
                 var d = await res.json();
-                if (!d.success || !d.data || !d.data.list || d.data.list.length === 0) {
+                // 之前这里不管什么原因都只显示「未找到相关公众号」，
+                // 连 Cookie 失效都被吞掉了。现在按后端给的原因分别提示。
+                if (!d.success) {
                     panel.className = 'search-results visible';
-                    panel.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:var(--font-sm);">未找到相关公众号</div>';
+                    panel.innerHTML = '<div style="padding:16px;text-align:center;color:var(--error-color);font-size:var(--font-sm);line-height:1.8;">' +
+                        escHtml(d.error || '搜索失败') +
+                        '<br><a href="/login.html" style="color:var(--primary-color);">去登录微信读书 &#8250;</a></div>';
+                    return;
+                }
+                if (!d.data || !d.data.list || d.data.list.length === 0) {
+                    panel.className = 'search-results visible';
+                    panel.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:var(--font-sm);line-height:1.8;">' +
+                        escHtml((d.data && d.data.hint) || '未找到相关公众号') + '</div>';
                     return;
                 }
                 var html = '';
