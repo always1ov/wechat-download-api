@@ -81,23 +81,32 @@
 **最快速的部署方式**，无需配置 Python 环境，一键启动：
 
 ```bash
-# 方式一：使用 docker-compose（推荐）
-git clone https://github.com/tmwgsicp/wechat-download-api.git
+# 方式一：docker compose（推荐）
+git clone https://github.com/always1ov/wechat-download-api.git
 cd wechat-download-api
 cp env.example .env
-# 编辑 .env 设置 SITE_URL 为实际访问地址
-docker-compose up -d
+# 编辑 .env，把 SITE_URL 改成实际访问地址
+docker compose up -d --build
 
-# 方式二：直接运行
+# 方式二：直接 docker run（先本地构建出镜像）
+docker build -t wechat-download-api:local .
 docker run -d \
   -p 5000:5000 \
   -v $(pwd)/data:/app/data \
-  -v $(pwd)/.env:/app/.env \
+  --env-file .env \
+  -e TZ=Asia/Shanghai \
   --name wechat-api \
-  tmwgsicp/wechat-download-api:latest
+  wechat-download-api:local
 ```
 
-服务启动后访问 `http://localhost:5000/login.html` 扫码登录即可使用。
+> compose 默认**本地构建**：本仓库有上游镜像里没有的改动（微信读书通道等），
+> 直接拉 `tmwgsicp/wechat-download-api` 拿不到。CI 跑通后可改用
+> `ghcr.io/always1ov/wechat-download-api:latest`，compose 里有注释好的那一行。
+
+服务启动后访问 `http://localhost:5000/admin.html`：
+
+1. 扫码登录公众号后台
+2. 顺手把「微信读书备用通道」也扫上 —— 后台凭证约 4 天过期，配了微信读书后过期也能继续采集
 
 **支持多架构**：`linux/amd64` / `linux/arm64`（Apple Silicon、树莓派、ARM 服务器）
 

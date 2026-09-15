@@ -56,16 +56,22 @@ API_DESCRIPTION = """
 async def lifespan(app: FastAPI):
     """应用生命周期：启动和关闭"""
     env_file = Path(__file__).parent / ".env"
-    if not env_file.exists():
+    if env_file.exists():
         print("\n" + "=" * 60)
-        print("[WARNING] .env file not found")
-        print("=" * 60)
-        print("Please configure .env file or login via admin page")
-        print("Visit: http://localhost:5000/admin.html")
+        print("[OK] .env file loaded")
+        print("=" * 60 + "\n")
+    elif os.getenv("SITE_URL") or os.getenv("WECHAT_TOKEN") or os.getenv("WEREAD_COOKIE"):
+        # docker compose 用 env_file 注入时容器内没有 .env 文件，这是正常的，
+        # 不该报警吓人 —— 配置已经在环境变量里了。
+        print("\n" + "=" * 60)
+        print("[OK] 配置来自环境变量（未使用 .env 文件）")
         print("=" * 60 + "\n")
     else:
         print("\n" + "=" * 60)
-        print("[OK] .env file loaded")
+        print("[WARNING] 未找到配置：既没有 .env 文件，也没有相关环境变量")
+        print("=" * 60)
+        print("请配置 .env 或环境变量，也可以直接到管理页扫码登录")
+        print("Visit: http://localhost:5000/admin.html")
         print("=" * 60 + "\n")
 
     init_db()

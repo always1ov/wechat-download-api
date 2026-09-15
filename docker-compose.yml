@@ -1,33 +1,55 @@
 # WeChat Download API - Docker Compose
-# Usage: docker-compose up -d
 #
-# First time setup:
-#   1. Copy env.example to .env: cp env.example .env
-#   2. Edit .env and set SITE_URL to your actual URL
-#   3. Run: docker-compose up -d
-#   4. Visit http://localhost:5000/login.html to scan QR code
+# 首次部署：
+#   1. cp env.example .env
+#   2. 编辑 .env，把 SITE_URL 改成实际访问地址（RSS 图片代理依赖它）
+#   3. docker compose up -d --build
+#   4. 打开 http://localhost:5000/admin.html
+#      · 扫码登录公众号后台
+#      · 顺手把「微信读书备用通道」也扫上 —— 后台凭证约 4 天过期，
+#        配了微信读书后过期也能继续采集
 #
-# Note for NAS users (Synology/QNAP):
-#   If you encounter permission issues, run on NAS:
-#   - chmod -R 777 ./data
-#   - Credentials are automatically saved to ./data directory
+# 群晖 / QNAP 等 NAS 若遇权限问题：chmod -R 777 ./data
+# 凭证统一保存在 ./data 目录，不会丢。
 
 services:
   wechat-api:
-    image: tmwgsicp/wechat-download-api:latest
-    # Or build locally:
-    # build: .
+    # 默认本地构建：本仓库有上游镜像里没有的改动（微信读书通道等），
+    # 直接拉 tmwgsicp/wechat-download-api 是拿不到的。
+    build: .
+    image: wechat-download-api:local
+    #
+    # 想用 CI 构建好的镜像，把上面两行换成下面这行（需先在仓库
+    # Settings → Actions 打开 Actions，让工作流跑一次）：
+    # image: ghcr.io/always1ov/wechat-download-api:latest
+    #
     container_name: wechat-download-api
     restart: unless-stopped
     ports:
       - "5000:5000"
     volumes:
-      # Persist SQLite database and credentials
+      # SQLite 库、公众号凭证、微信读书凭证都在这里，必须持久化
       - ./data:/app/data
-      # Config file (read-only - credentials saved to data/)
-      - ./.env:/app/.env:ro
+    env_file:
+      # 没有这个文件会直接报错（好过静默用默认值跑起来）：先 cp env.example .env
+      - .env
     environment:
       - TZ=Asia/Shanghai
+      # 下面这些留在这里作为速查；正式配置写 .env 更好维护
+      #
+      # 必配 —— RSS 图片代理靠它拼绝对地址，配错图片显示不出来
+      # - SITE_URL=http://你的IP:5000
+      #
+      # 微信读书备用通道（强烈建议）：公众号后台凭证过期 / 触发风控 /
+      # 正文抓取遇验证码时自动顶上。管理页扫码即可，不必手填 Cookie。
+      # - WEREAD_COOKIE=wr_vid=...; wr_skey=...; wr_rt=...
+      # - ARTICLE_SOURCE=auto          # auto=后台优先读书兜底 / mp / weread
+      # - WEREAD_AUTO_RENEW=true       # wr_skey 过期自动用 wr_rt 续期
+      # - WEREAD_APP_API=true          # App 域接口（多一个「搜公众号」能力）
+      # - WEREAD_AUTO_ADD_SHELF=true   # 采集前自动把公众号加入微信读书书架
+      #
+      # 抓正文时分散 IP，降低风控概率
+      # - PROXY_URLS=socks5://ip1:1080,socks5://ip2:1080
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5000/api/health"]
       interval: 30s
