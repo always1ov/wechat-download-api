@@ -1,10 +1,11 @@
 # WeChat Download API —— 单文件部署，只要这一个 docker-compose.yml
 #
 #   docker compose up -d --build
-#   打开 http://localhost:5000/admin.html
-#     · 扫码登录公众号后台
-#     · 顺手把「微信读书备用通道」也扫上 —— 后台凭证约 4 天过期，
-#       配了微信读书后过期也能继续采集
+#   打开 http://localhost:5000/admin.html，按卡片三步走：
+#     ① 扫码登录微信读书（/login.html）
+#     ② 从书架导入公众号（/rss.html「添加订阅 → 从微信读书书架导入」）
+#     ③ RSS 订阅管理
+#   前提：先在微信读书 App 里关注你想订阅的公众号。不需要公众号后台。
 #
 # 要改配置，直接改下面 environment 里的值就行，不需要额外的 .env。
 # （如果同目录下确实放了 .env，compose 会自动用它覆盖下面的默认值，两种都支持。）
@@ -27,7 +28,7 @@ services:
     ports:
       - "${HOST_PORT:-5000}:5000"
     volumes:
-      # SQLite 库、公众号凭证、微信读书凭证都在这里，必须持久化
+      # SQLite 文章库和微信读书登录态都在这里，必须持久化
       - ./data:/app/data
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -37,10 +38,9 @@ services:
       # 换成实际访问地址，如 http://192.168.1.10:5000 或 https://你的域名
       SITE_URL: ${SITE_URL:-http://localhost:5000}
 
-      # ── 微信读书备用通道（强烈建议）────────────────────────
-      # 公众号后台凭证过期 / 触发风控 / 正文遇验证码时自动顶上。
-      # 不用在这里填 Cookie —— 管理页点「扫码登录微信读书」更省事，
-      # 扫完存在 ./data 里，过期还能用 wr_rt 自动续期。
+      # ── 微信读书（唯一数据源）──────────────────────────────
+      # 不用在这里填 Cookie —— 打开 /login.html 扫码更省事，
+      # 扫完存在 ./data 里，wr_skey 过期还能用 wr_rt 自动续期。
       WEREAD_COOKIE: ${WEREAD_COOKIE:-}
       WEREAD_AUTO_RENEW: ${WEREAD_AUTO_RENEW:-true}    # wr_skey 过期自动用 wr_rt 续期
       WEREAD_APP_API: ${WEREAD_APP_API:-true}          # App 域接口（多一个「搜公众号」能力）

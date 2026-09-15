@@ -35,7 +35,7 @@
 
 <div align="center">
   <img src="assets/dashboard.jpg" width="800" alt="管理面板">
-  <p><em>管理面板 — 登录状态、接口文档、在线测试一站式管理</em></p>
+  <p><em>管理面板 — 登录状态、内容管理、系统诊断、在线测试一站式管理</em></p>
   <br>
   <img src="assets/rss.jpg" width="800" alt="RSS 订阅管理">
   <p><em>RSS 订阅管理 — 搜索公众号一键订阅，复制地址接入 RSS 阅读器</em></p>
@@ -105,10 +105,11 @@ docker run -d \
 > 直接拉 `tmwgsicp/wechat-download-api` 拿不到。CI 跑通后可改用
 > `ghcr.io/always1ov/wechat-download-api:latest`，compose 里有注释好的那一行。
 
-服务启动后访问 `http://localhost:5000/admin.html`：
+服务启动后访问 `http://localhost:5000/admin.html`，按卡片上的三步走：
 
-1. 扫码登录公众号后台
-2. 顺手把「微信读书备用通道」也扫上 —— 后台凭证约 4 天过期，配了微信读书后过期也能继续采集
+1. 扫码登录微信读书（跳 `/login.html`）
+2. 从书架导入公众号（跳 `/rss.html`，在「添加订阅」里）
+3. RSS 订阅管理
 
 **支持多架构**：`linux/amd64` / `linux/arm64`（Apple Silicon、树莓派、ARM 服务器）
 
@@ -128,7 +129,7 @@ docker run -d \
 
 1. 在**微信读书 App** 里关注你想订阅的公众号
 2. 部署后打开 `/login.html`，用微信扫码登录微信读书
-3. 管理页点「从书架导入公众号」，一键变成 RSS 订阅
+3. 打开 `/rss.html`，在「添加订阅」里点「从微信读书书架导入」，一键变成 RSS 订阅
 
 登录态存在 `data/` 目录，重启不丢；`wr_skey` 过期会自动用 `wr_rt` 续期，一般不用反复扫码。
 
@@ -139,9 +140,9 @@ docker run -d \
 
 ## 微信读书通道
 
-公众号后台这条路有三个绕不开的坑：**凭证约 4 天过期**、`appmsgpublish` **有频率风控**、正文页直抓**会触发验证码**。任意一个踩中，轮询器和文章接口就会静默失联——表现就是「RSS 不更新了」「文章拿不到正文」。
+公众号后台那条路有三个绕不开的坑：**凭证约 4 天过期**、`appmsgpublish` **有频率风控**、正文页直抓**会触发验证码**。任意一个踩中，轮询器和文章接口就会静默失联——表现就是「RSS 不更新了」「文章拿不到正文」。而且它要求你**本人是公众号管理员**，大多数人根本进不去后台。
 
-[微信读书](https://weread.qq.com) Web 端能读到同样的公众号文章，而且用的是**另一套登录态**（`wr_skey` / `wr_vid` / `wr_rt`），不共享公众号后台的风控额度。配好它之后，后台不可用时会自动切过去，采集不中断。
+所以本项目把那条链路整个删掉了，数据全部走 [微信读书](https://weread.qq.com)：Web 端能读到同样的公众号文章，用的是独立的一套登录态（`wr_skey` / `wr_vid` / `wr_rt`），不需要任何公众号身份。
 
 > 方案来源：[rachelos/we-mp-rss#442](https://github.com/rachelos/we-mp-rss/issues/442)
 
@@ -149,7 +150,9 @@ docker run -d \
 
 **方式一：扫码登录（推荐）**
 
-打开管理页 `/admin.html` → 「微信读书备用通道」→ 点「扫码登录微信读书」，用微信扫一下就好。凭证会自动验证并保存到 `data/.weread.json`。
+打开 `/login.html`（管理页「快捷操作 → ① 扫码登录微信读书」也是这个页），用微信扫一下就好。凭证会自动验证并保存到 `data/.weread.json`。
+
+同一页底部还有「校验登录态」「手动续期」「手动填 Cookie」三个维护按钮，平时用不到。
 
 命令行同样可以：
 
@@ -166,6 +169,7 @@ curl http://localhost:5000/api/weread/qrcode/status
 1. 浏览器登录 <https://weread.qq.com>
 2. 按 `F12` 打开开发者工具 → `Network` 面板 → 刷新页面，点开任意一个请求
 3. 在 `Request Headers` 里复制完整的 `Cookie`（需要包含 `wr_skey` / `wr_vid` / `wr_rt`）
+4. 粘进 `/login.html` 底部的「手动填 Cookie」，或用下面的环境变量 / 接口写入
 
 ```bash
 # 环境变量（优先级高于管理页写入）
@@ -249,7 +253,7 @@ App 域按「能用就用」处理：不通（401/风控）就记一笔，10 分
 但微信读书的书架能替代它：**你在微信读书 App 里关注的公众号，这里直接能列出来**。
 
 ```bash
-# 1. 管理页扫码登录微信读书（或配 WEREAD_COOKIE）
+# 1. 打开 /login.html 扫码登录微信读书（或配 WEREAD_COOKIE）
 # 2. 看看书架上有哪些公众号
 curl http://localhost:5000/api/weread/shelf/accounts
 
@@ -261,7 +265,7 @@ curl -X POST http://localhost:5000/api/weread/shelf/import \
 #   -d '{"fakeids": ["MzI5NjM4MjExMg==", "..."]}'
 ```
 
-管理页上就是「微信读书备用通道」里的**「从书架导入公众号」**按钮。
+页面上就是 `/rss.html` 「添加订阅」里的**「从微信读书书架导入」**按钮。
 
 书架用的是 `/web/shelf/sync` —— 和登录态校验同一个接口，扫码有效就一定能出结果，
 是这套里最稳的一环。想订阅新号，先去微信读书 App 关注它，再回来点一次导入。
@@ -291,11 +295,11 @@ curl "http://localhost:5000/api/weread/diagnose?fakeid=你的公众号fakeid" | 
 
 ### 已知限制
 
-- **`wr_rt` 本身也有寿命**：`wr_skey` 过期能自动续期，但 `wr_rt` 失效后（长期不用 / 微信读书侧主动失效）续期也会失败，这时需要重新扫码。两条通道的凭证互不相关，同时配上才是真的双保险。
-- **拿不到「号内搜索」**：微信读书能搜公众号（`/store/search`），但没有「在某个号内搜文章」的接口。`/api/public/articles` 带 `keyword` 回退到微信读书时，只能对已拉回的列表做标题/摘要过滤，召回范围受 `WEREAD_MAX_PAGES` 限制。
-- **App 域未实测**：`i.weread.qq.com` 那几个接口（搜索、列表）是按公开可见的调用形态实现的，尚未在真实账号上跑通。全部挂在回退结构下，不通就退回网页域/公众号后台，不会让现有功能变坏。
+- **`wr_rt` 本身也有寿命**：`wr_skey` 过期能自动续期，但 `wr_rt` 失效后（长期不用 / 微信读书侧主动失效）续期也会失败，这时需要重新扫码。
+- **拿不到「号内搜索」**：微信读书能搜公众号（`/store/search`），但没有「在某个号内搜文章」的接口。`/api/public/articles` 带 `keyword` 时，只能对已拉回的列表做标题/摘要过滤，召回范围受 `WEREAD_MAX_PAGES` 限制。
+- **App 域未实测**：`i.weread.qq.com` 那几个接口（搜索、列表）是按公开可见的调用形态实现的，尚未在真实账号上跑通。全部挂在回退结构下，不通就退回网页域（`weread.qq.com`），不会让现有功能变坏。
 - **正文接口限流较严**：`WEREAD_CONTENT_INTERVAL` 建议保持 ≥ 2 秒。
-- **只认短链**：`reviewId` 由 `bookId` + 文章短链 token 拼成，所以 `/api/article` 走微信读书兜底时只支持 `https://mp.weixin.qq.com/s/<token>` 形式的链接；长链（`/s?__biz=...`）没有 token，推不出 `reviewId`。
+- **只认短链**：`reviewId` 由 `bookId` + 文章短链 token 拼成，所以 `/api/article` 只支持 `https://mp.weixin.qq.com/s/<token>` 形式的链接；长链（`/s?__biz=...`）没有 token，推不出 `reviewId`。
 - **列表接口偶发不可用**：微信读书曾一度停掉 `/web/mp/articles`。遇到这种情况会自动退到 `/api/mp/cover`，但那个接口一次只返回**最新一篇**，补不了历史。
 
 ---
@@ -341,7 +345,8 @@ start.bat      # Windows
 
 **第三步：扫码登录**
 
-访问 `http://localhost:5000/login.html`，用**公众号管理员微信**扫码登录。
+访问 `http://localhost:5000/login.html`，用微信扫码登录**微信读书**（不需要公众号管理员身份）。
+登录完去 `/rss.html` 「添加订阅 → 从微信读书书架导入」。
 
 ---
 
@@ -352,7 +357,8 @@ start.bat      # Windows
 | 地址 | 说明 |
 |------|------|
 | http://localhost:5000 | 管理面板 |
-| http://localhost:5000/login.html | 扫码登录 |
+| http://localhost:5000/login.html | 扫码登录微信读书 · 凭证维护 |
+| http://localhost:5000/rss.html | RSS 订阅管理 · 书架导入 |
 | http://localhost:5000/api/docs | Swagger API 文档 |
 | http://localhost:5000/api/health | 健康检查 |
 
@@ -726,7 +732,7 @@ curl -OJ "http://localhost:5000/api/export/account/MzA1MjM1ODk2MA==.epub?since=$
 | `POST` | `/api/weread/qrcode` | 获取微信读书登录二维码 |
 | `GET` | `/api/weread/qrcode/status` | 查询扫码状态 |
 | `GET` | `/api/admin/status` | 查询登录状态 |
-| `GET` | `/api/weread/status` | 微信读书通道状态（详见 [微信读书备用通道](#微信读书备用通道)） |
+| `GET` | `/api/weread/status` | 微信读书通道状态（详见 [微信读书通道](#微信读书通道)） |
 | `POST` | `/api/admin/logout` | 退出登录 |
 
 完整的接口文档请访问 http://localhost:5000/api/docs
@@ -751,7 +757,7 @@ cp env.example .env
 | `RSS_POLL_INTERVAL` | RSS 轮询间隔（秒） | 3600 |
 | `ARTICLES_PER_POLL` | 每次轮询每个公众号拉取的文章批次数 | 10 |
 | `RSS_FETCH_FULL_CONTENT` | RSS 是否获取完整内容（true/false） | true |
-| `WEREAD_COOKIE` | **微信读书 Cookie（后台失效时的备用通道，强烈建议配置；也可在管理页扫码登录）** | 空 |
+| `WEREAD_COOKIE` | **微信读书 Cookie（不填就走 `/login.html` 扫码登录，二选一）** | 空 |
 | `WEREAD_AUTO_RENEW` | wr_skey 过期时自动用 wr_rt 续期 | true |
 | `WEREAD_APP_API` | 启用微信读书 App 域接口（`i.weread.qq.com`，多一个搜公众号能力） | true |
 | `WEREAD_ENABLED` | 强制开关微信读书通道（留空=配了 Cookie 就启用） | 空 |
