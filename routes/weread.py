@@ -13,18 +13,32 @@
 """
 
 import logging
+import os
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, BackgroundTasks, Query, Request
 from pydantic import BaseModel, Field
 
 from utils import rss_store, weread_client
+from utils.image_proxy import proxy_image_url
+from utils.rss_poller import rss_poller
 from utils.weread_client import WereadClient, WereadError, weread_auth
 from utils.weread_qr import weread_qr_login
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def get_base_url(request: Request) -> str:
+    """服务的基础 URL，用于把封面拼成绝对地址（同 routes/search.py 的实现）。"""
+    site_url = os.getenv("SITE_URL", "").strip()
+    if site_url:
+        return site_url.rstrip("/")
+    proto = request.headers.get("X-Forwarded-Proto", "http")
+    host = (request.headers.get("X-Forwarded-Host")
+            or request.headers.get("Host", "localhost:5000"))
+    return f"{proto}://{host}"
 
 
 class WereadResponse(BaseModel):
@@ -41,6 +55,14 @@ class CookieRequest(BaseModel):
         description="微信读书 Cookie，需含 wr_skey / wr_vid / wr_rt。"
                     "取法：浏览器登录 weread.qq.com → F12 Network → 任意请求 → "
                     "复制 Request Headers 里的完整 Cookie",
+    )
+
+
+class ShelfImportRequest(BaseModel):
+    """从书架导入订阅"""
+    fakeids: List[str] = Field(
+        default_factory=list,
+        description="只导入这些公众号的 FakeID；留空表示导入书架上全部公众号",
     )
 
 
@@ -226,6 +248,92 @@ async def add_to_shelf(req: ShelfRequest):
 
     data = {"book_id": book_id, "fakeid": req.fakeid, "detail": detail}
     return WereadResponse(success=ok, data=data, error=None if ok else detail)
+
+
+@router.get("/weread/shelf/accounts", response_model=WereadResponse,
+            summary="列出微信读书书架上的公众号")
+async def weread_shelf_accounts(request: Request = None):
+    """
+    列出你在微信读书里关注的公众号。
+
+    **没有公众号后台也能用** —— 用的是 `/web/shelf/sync`，和登录态校验同一个接口，
+    只要扫码登录有效就一定能出结果。想订阅哪个号，先在微信读书 App 里关注它，
+    这里就会出现。
+
+    返回的 `fakeid` 可直接用于 `/api/rss/subscribe`、`/api/public/articles` 等既有接口。
+    """
+    if not weread_auth.is_configured():
+        return WereadResponse(success=False, error=weread_client.COOKIE_MISSING_MSG)
+
+    base_url = get_base_url(request) if request else ""
+    try:
+        async with WereadClient() as client:
+            accounts = await client.get_shelf_accounts()
+    except WereadError as e:
+        return WereadResponse(success=False, error=e.user_message)
+    except Exception as e:
+        logger.error("[WeRead] 书架读取异常: %s", e)
+        return WereadResponse(success=False, error=f"读取书架失败: {e}")
+
+    subscribed = set(rss_store.get_all_fakeids())
+    for acc in accounts:
+        acc["round_head_img"] = proxy_image_url(acc.get("round_head_img", ""), base_url)
+        acc["subscribed"] = acc["fakeid"] in subscribed
+
+    return WereadResponse(success=True, data={
+        "list": accounts,
+        "total": len(accounts),
+        "source": "weread_shelf",
+    })
+
+
+@router.post("/weread/shelf/import", response_model=WereadResponse,
+             summary="把书架上的公众号导入为 RSS 订阅")
+async def weread_shelf_import(req: ShelfImportRequest, background: BackgroundTasks):
+    """
+    一键把微信读书书架上的公众号变成 RSS 订阅，并在后台立即各抓一次。
+
+    **请求体参数：**
+    - **fakeids** (可选): 只导入指定的几个；留空导入书架上全部公众号
+
+    这是不依赖公众号后台的完整入口：微信读书里关注 → 这里导入 → 直接出 RSS。
+    """
+    if not weread_auth.is_configured():
+        return WereadResponse(success=False, error=weread_client.COOKIE_MISSING_MSG)
+
+    try:
+        async with WereadClient() as client:
+            accounts = await client.get_shelf_accounts()
+    except WereadError as e:
+        return WereadResponse(success=False, error=e.user_message)
+    except Exception as e:
+        logger.error("[WeRead] 书架读取异常: %s", e)
+        return WereadResponse(success=False, error=f"读取书架失败: {e}")
+
+    wanted = set(req.fakeids or [])
+    if wanted:
+        accounts = [a for a in accounts if a["fakeid"] in wanted]
+
+    blacklisted = set(rss_store.get_active_blacklist_fakeids())
+    added, skipped = [], []
+    for acc in accounts:
+        if acc["fakeid"] in blacklisted:
+            skipped.append({"nickname": acc["nickname"], "reason": "在黑名单里"})
+            continue
+        is_new = rss_store.add_subscription(
+            acc["fakeid"], acc["nickname"], acc["alias"], acc["round_head_img"]
+        )
+        # 新订阅和已订阅的都抓一次 —— 用户点导入多半就是因为没看到文章
+        background.add_task(rss_poller.fetch_now, acc["fakeid"])
+        added.append({"fakeid": acc["fakeid"], "nickname": acc["nickname"],
+                      "new": bool(is_new)})
+
+    return WereadResponse(success=True, data={
+        "imported": added,
+        "skipped": skipped,
+        "total": len(added),
+        "message": f"已导入 {len(added)} 个公众号，正在后台拉取文章",
+    })
 
 
 @router.get("/weread/diagnose", response_model=WereadResponse, summary="诊断微信读书通道")

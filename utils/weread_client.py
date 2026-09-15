@@ -507,6 +507,12 @@ def mark_app_domain_unusable(reason: str = ""):
 _shelf_confirmed: set = set()
 
 
+def mark_on_shelf(book_id: str):
+    """记下某个号确认在书架上，省掉后续多余的查询/添加请求。"""
+    if book_id:
+        _shelf_confirmed.add(book_id)
+
+
 def reset_shelf_cache():
     """换 Cookie（换账号）后书架状态、续期冷却、i 域探测结果都不再可信，一起清掉。"""
     global _last_renew_at, _last_renew_ok, _app_domain_blocked_until
@@ -702,6 +708,47 @@ def parse_app_articles(payload: Dict, book_id: str = "") -> Tuple[List[Dict], in
         if article:
             articles.append(article)
     return articles, len(items)
+
+
+def parse_shelf_accounts(payload) -> List[Dict]:
+    """从 /web/shelf/sync 里挑出公众号。
+
+    书架上书和公众号混在一起，bookId 以 MP_WXS_ 开头的才是公众号。
+    这条路的价值在于：完全不需要公众号后台 —— 用户在微信读书 App 里关注了谁，
+    这里就能列出谁，换算回 fakeid 后可直接订阅。
+    """
+    if not isinstance(payload, dict):
+        return []
+    raise_for_payload(payload)
+
+    books = payload.get("books")
+    if not isinstance(books, list):
+        return []
+
+    accounts, seen = [], set()
+    for item in books:
+        if not isinstance(item, dict):
+            continue
+        book_id = str(item.get("bookId") or "").strip()
+        if not book_id.startswith(MP_BOOK_PREFIX) or book_id in seen:
+            continue
+        seen.add(book_id)
+        try:
+            fakeid = book_id_to_fakeid(book_id)
+        except Exception:
+            continue
+        accounts.append({
+            "fakeid": fakeid,
+            "book_id": book_id,
+            "nickname": item.get("title", "") or "",
+            "alias": item.get("author", "") or "",
+            "round_head_img": item.get("cover", "") or "",
+            "intro": item.get("intro", "") or "",
+            "update_time": item.get("updateTime", 0) or 0,
+            "service_type": 0,
+            "source": "weread_shelf",
+        })
+    return accounts
 
 
 def parse_shelf_book_ids(payload) -> Optional[List[str]]:
@@ -1060,6 +1107,24 @@ class WereadClient:
             return False, f"加入书架失败: {exc.user_message}"
         _shelf_confirmed.add(book_id)
         return True, f"「{name or book_id}」已自动加入微信读书书架"
+
+    async def get_shelf_accounts(self) -> List[Dict]:
+        """列出书架上的公众号。
+
+        用的就是 verify() 那个接口，所以只要登录态有效这里就能出结果 ——
+        这是不依赖公众号后台、最稳的一条「找公众号」的路。
+        userVid 必须传空字符串，传真实 vid 反而触发 -2012。
+        """
+        payload = await self._request(
+            "GET", "/web/shelf/sync",
+            params={"userVid": "", "synckey": 0, "lectureSynckey": 0},
+            interval=page_interval(),
+        )
+        accounts = parse_shelf_accounts(payload)
+        # 书架上列出来的，按定义就在书架上 —— 记下来，采集时不必再查/再加一次
+        for acc in accounts:
+            mark_on_shelf(acc["book_id"])
+        return accounts
 
     async def verify(self) -> Tuple[bool, str]:
         """打一次最轻的接口确认 Cookie 还有效。返回 (是否有效, 说明)。

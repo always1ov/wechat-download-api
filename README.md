@@ -125,7 +125,11 @@ docker run -d \
 
 ## 使用前提
 
-> 本工具需要通过微信公众平台后台的登录凭证来调用接口，因此使用前需要：
+> **没有微信公众号也能用**：扫码登录微信读书后，可以把你在微信读书里关注的公众号
+> 一键导入成 RSS 订阅（管理页「从书架导入公众号」，或 `POST /api/weread/shelf/import`）。
+> 这条路完全不碰公众号后台。下面讲的是公众号后台那条路，两条可以只用其一。
+
+> 走公众号后台需要：
 
 1. **拥有一个微信公众号**（订阅号、服务号均可）
 2. 部署并启动服务后，访问登录页面用**公众号管理员微信**扫码登录
@@ -242,10 +246,38 @@ App 域按「能用就用」处理：不通（401/风控）就记一笔，10 分
 | `POST` | `/api/weread/verify` | 校验当前 Cookie 是否还有效 |
 | `POST` | `/api/weread/renew` | 手动用 `wr_rt` 续期 `wr_skey` |
 | `POST` | `/api/weread/shelf` | 手动把公众号加入微信读书书架 |
+| `GET` | `/api/weread/shelf/accounts` | 列出微信读书书架上的公众号（**不需要公众号后台**） |
+| `POST` | `/api/weread/shelf/import` | 把书架上的公众号一键导入为 RSS 订阅并立即采集 |
 | `GET` | `/api/weread/diagnose?fakeid=xxx` | **排障用**：把整条链路逐步跑一遍，指出卡在哪一步 |
 | `GET` | `/api/weread/search?query=xxx` | 直连微信读书搜公众号（App 域，不经过后台） |
 | `GET` | `/api/weread/articles?fakeid=xxx` | 直连微信读书取文章列表（完全不经过后台） |
 | `GET` | `/api/weread/content?review_id=xxx` | 直连微信读书取正文，也可传 `url` + `fakeid` |
+
+### 没有公众号？走书架这条路
+
+公众号后台的 `searchbiz` 是搜 fakeid 的唯一官方入口，没有公众号就搜不了。
+但微信读书的书架能替代它：**你在微信读书 App 里关注的公众号，这里直接能列出来**。
+
+```bash
+# 1. 管理页扫码登录微信读书（或配 WEREAD_COOKIE）
+# 2. 看看书架上有哪些公众号
+curl http://localhost:5000/api/weread/shelf/accounts
+
+# 3. 一键全部导入成 RSS 订阅，并立即采集
+curl -X POST http://localhost:5000/api/weread/shelf/import \
+  -H "Content-Type: application/json" -d '{}'
+
+# 只导入其中几个：
+#   -d '{"fakeids": ["MzI5NjM4MjExMg==", "..."]}'
+```
+
+管理页上就是「微信读书备用通道」里的**「从书架导入公众号」**按钮。
+
+书架用的是 `/web/shelf/sync` —— 和登录态校验同一个接口，扫码有效就一定能出结果，
+是这套里最稳的一环。想订阅新号，先去微信读书 App 关注它，再回来点一次导入。
+
+> 顺带：`/api/public/searchbiz` 在后台不可用时，也会先试 App 域搜索，
+> 再退回「从书架里按名字匹配」，所以搜索接口本身也不会因为没有公众号而彻底失效。
 
 ### 拉不到文章怎么办
 
@@ -260,6 +292,7 @@ curl "http://localhost:5000/api/weread/diagnose?fakeid=你的公众号fakeid" | 
 
 | 现象 | 原因 | 处理 |
 |------|------|------|
+| 搜不到公众号、拿不到 fakeid | 没有公众号后台，`searchbiz` 用不了 | 用上面的「从书架导入」 |
 | 刚订阅就去看，是空的 | 旧版本只写库、等下一轮轮询（默认 1 小时） | 已修：订阅会立即在后台抓一次；也可手动 `POST /api/rss/poll` |
 | 诊断显示登录态 `-2012` | `wr_skey` 过期 | 有 `wr_rt` 会自动续期；诊断里续期也失败就重新扫码 |
 | 「加入书架」失败 | 微信读书只对**书架上**的公众号返回文章 | 手动在微信读书 App 里关注该号，或检查 Cookie 是否含 `wr_vid` |

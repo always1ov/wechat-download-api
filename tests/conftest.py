@@ -28,3 +28,24 @@ def _init_db():
     from utils import rss_store
 
     rss_store.init_db()
+
+
+@pytest.fixture(autouse=True)
+def _reset_weread_singletons():
+    """把微信读书那几个进程级单例状态清干净再跑下一个用例。
+
+    weread_auth / 书架缓存 / 续期冷却 / i 域探测结果都是模块级的，
+    上一个用例（比如续期成功后写了 _runtime_cookie）会串到下一个用例，
+    表现为「单独跑通过、全量跑失败」。
+    """
+    from utils import weread_client as wc
+
+    def clear():
+        wc.weread_auth._runtime_cookie = ""
+        wc.weread_auth._cache = {}
+        wc.weread_auth._last_loaded_at = 0.0
+        wc.reset_shelf_cache()
+
+    clear()
+    yield
+    clear()

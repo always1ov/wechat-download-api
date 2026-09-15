@@ -61,14 +61,39 @@ def _filter_blacklisted(accounts: list) -> list:
 
 
 async def search_via_weread(query: str, base_url: str = "") -> list:
-    """用微信读书搜公众号（i 域 /store/search）。
+    """用微信读书搜公众号，两条路：
 
-    公众号后台的 searchbiz 是本项目最后一个硬依赖后台的环节；微信读书自己能搜，
-    搜到的 MP_WXS_* 换算回 fakeid 后可直接喂给既有的订阅/文章接口。
-    i 域不可用时抛 WereadError，由调用方回退到后台。
+    1. i 域 /store/search —— 能搜全网，但对登录态要求严，不一定通；
+    2. 书架过滤 —— 只能搜到「你在微信读书里已关注的号」，但用的是
+       verify() 同一个接口，登录态有效就一定能出结果。
+
+    对没有公众号后台的用户来说第 2 条是保底：先在微信读书 App 里关注，
+    这里就搜得到。两条都不行才抛错，由调用方回退到后台。
     """
+    needle = (query or "").strip().lower()
+    accounts, store_error = [], None
+
     async with weread_client.WereadClient() as client:
-        accounts = await client.search_mp_accounts(query)
+        try:
+            accounts = await client.search_mp_accounts(query)
+        except weread_client.WereadError as e:
+            store_error = e
+            logger.info("[WeRead] /store/search 不可用（%s），改从书架里找", e.message)
+
+        if not accounts:
+            shelf = await client.get_shelf_accounts()
+            accounts = [
+                a for a in shelf
+                if not needle
+                or needle in (a.get("nickname", "") or "").lower()
+                or needle in (a.get("alias", "") or "").lower()
+            ]
+            if accounts:
+                logger.info("[WeRead] 从书架匹配到 %d 个公众号", len(accounts))
+            elif store_error is not None and not shelf:
+                # 两条路都没结果且搜索本身报过错，把原始错误交出去
+                raise store_error
+
     for acc in accounts:
         acc["round_head_img"] = proxy_image_url(acc.get("round_head_img", ""), base_url)
     return _filter_blacklisted(accounts)

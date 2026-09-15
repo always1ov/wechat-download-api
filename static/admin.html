@@ -706,6 +706,16 @@
                     <button class="btn btn-primary" id="wereadSaveBtn" onclick="saveWereadCookie()">保存</button>
                 </div>
                 <div class="weread-actions">
+                    <button class="btn btn-primary" onclick="loadWereadShelf()">从书架导入公众号</button>
+                    <span class="weread-hint">在微信读书 App 里关注的公众号，这里一键变成 RSS 订阅（不需要公众号后台）</span>
+                </div>
+                <div class="weread-qr" id="wereadShelfPanel" style="text-align:left;">
+                    <div id="wereadShelfList"></div>
+                    <div style="margin-top:12px;">
+                        <button class="btn btn-primary" id="wereadImportBtn" onclick="importWereadShelf()">全部导入并立即拉取</button>
+                    </div>
+                </div>
+                <div class="weread-actions">
                     <button class="btn btn-ghost" onclick="verifyWereadCookie()">校验</button>
                     <button class="btn btn-ghost" onclick="renewWereadCookie()">续期</button>
                     <button class="btn btn-ghost" onclick="clearWereadCookie()">清除</button>
@@ -1076,6 +1086,56 @@
             } catch (e) {
                 /* 网络抖动就等下一轮，不打断用户 */
             }
+        }
+
+        async function loadWereadShelf() {
+            var panel = document.getElementById('wereadShelfPanel');
+            var list = document.getElementById('wereadShelfList');
+            panel.className = 'weread-qr visible';
+            list.textContent = '正在读取书架...';
+            try {
+                var res = await fetch('/api/weread/shelf/accounts');
+                var data = await res.json();
+                if (!data.success) {
+                    list.textContent = data.error || '读取书架失败';
+                    return;
+                }
+                var accounts = data.data.list || [];
+                if (!accounts.length) {
+                    list.textContent = '书架上没有公众号。先在微信读书 App 里关注几个公众号，再回来点这里。';
+                    return;
+                }
+                list.innerHTML = accounts.map(function (a) {
+                    return '<div style="padding:4px 0;font-size:13px;">'
+                        + (a.subscribed ? '✅ ' : '▫️ ')
+                        + '<b>' + (a.nickname || a.fakeid) + '</b>'
+                        + (a.subscribed ? ' <span style="color:#8c8c8c;">已订阅</span>' : '')
+                        + '</div>';
+                }).join('');
+            } catch (e) {
+                list.textContent = '请求失败: ' + e.message;
+            }
+        }
+
+        async function importWereadShelf() {
+            var btn = document.getElementById('wereadImportBtn');
+            btn.disabled = true;
+            btn.textContent = '导入中...';
+            try {
+                var res = await fetch('/api/weread/shelf/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                var data = await res.json();
+                wereadFeedback(data.success,
+                    data.success ? (data.data.message || '导入完成') : (data.error || '导入失败'));
+                if (data.success) loadWereadShelf();
+            } catch (e) {
+                wereadFeedback(false, '请求失败: ' + e.message);
+            }
+            btn.disabled = false;
+            btn.textContent = '全部导入并立即拉取';
         }
 
         async function renewWereadCookie() {
