@@ -82,10 +82,14 @@ async def weread_status():
     - `enabled`: 通道是否启用（默认「配了 Cookie 就启用」，可用 WEREAD_ENABLED 覆盖）
     - `env_managed`: Cookie 是否由 WEREAD_COOKIE 环境变量托管（是则管理页写入不生效）
     - `vid`: Cookie 里的 wr_vid
+    - `auto_renew`: wr_skey 过期是否自动用 wr_rt 续期
+    - `app_api`: App 域（i.weread.qq.com）当前是否可用
     - `auto_add_to_shelf`: 采集前是否自动把公众号加入书架
     """
     info = weread_auth.get_info()
     info.update({
+        "auto_renew": weread_client.auto_renew(),
+        "app_api": weread_client.app_domain_usable(),
         "auto_add_to_shelf": weread_client.auto_add_to_shelf(),
         "content_interval": weread_client.content_interval(),
         "page_interval": weread_client.page_interval(),
