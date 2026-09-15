@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""HTTP 接口层：公众号后台不可用时改走微信读书。"""
+"""HTTP 接口层：文章列表 / 正文 / 微信读书管理接口。"""
 
 import pytest
 from fastapi.testclient import TestClient
 
 from utils import weread_client as wc
-from utils.auth_manager import auth_manager
 from utils.rate_limiter import rate_limiter
 from utils.weread_client import WereadClient, WereadError
 
@@ -22,7 +21,6 @@ def _clean_env(monkeypatch, tmp_path):
     monkeypatch.setenv("WEREAD_PAGE_INTERVAL", "0")
     monkeypatch.setenv("WEREAD_AUTO_ADD_SHELF", "false")
     monkeypatch.delenv("WEREAD_ENABLED", raising=False)
-    monkeypatch.delenv("ARTICLE_SOURCE", raising=False)
     # 限频器在 import 时就固化了阈值，且 /api/article 默认 3 秒一篇 —— 测试里关掉
     monkeypatch.setattr(rate_limiter, "ARTICLE_INTERVAL", 0)
     monkeypatch.setattr(rate_limiter, "GLOBAL_LIMIT", 10 ** 6)
@@ -67,7 +65,6 @@ def _install_weread(monkeypatch, *, titles=(), content="", error=None):
 
 def test_articles_uses_weread_when_backend_not_logged_in(client, monkeypatch):
     """后台没登录（凭证过期是常态）也能出文章列表，而不是直接 401。"""
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
     _install_weread(monkeypatch, titles=["tok1", "tok2"])
 
     r = client.get("/api/public/articles", params={"fakeid": FAKEID, "count": 10})
@@ -78,25 +75,16 @@ def test_articles_uses_weread_when_backend_not_logged_in(client, monkeypatch):
     assert [a["title"] for a in body["data"]["articles"]] == ["tok1", "tok2"]
 
 
-def test_articles_401_when_both_channels_unavailable(client, monkeypatch):
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
+def test_articles_without_login_explains_what_to_do(client, monkeypatch):
+    """没登录微信读书时给可操作的提示，而不是一个裸 401。"""
     monkeypatch.delenv("WEREAD_COOKIE", raising=False)
 
-    r = client.get("/api/public/articles", params={"fakeid": FAKEID})
-    assert r.status_code == 401
-
-
-def test_articles_source_mp_disables_weread(client, monkeypatch):
-    """ARTICLE_SOURCE=mp 时不许偷偷走微信读书。"""
-    monkeypatch.setenv("ARTICLE_SOURCE", "mp")
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
-
-    r = client.get("/api/public/articles", params={"fakeid": FAKEID})
-    assert r.status_code == 401
+    body = client.get("/api/public/articles", params={"fakeid": FAKEID}).json()
+    assert body["success"] is False
+    assert "未配置" in body["error"]
 
 
 def test_articles_keyword_filters_weread_results(client, monkeypatch):
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
     _install_weread(monkeypatch, titles=["alpha", "beta"])
 
     r = client.get("/api/public/articles",
@@ -105,7 +93,6 @@ def test_articles_keyword_filters_weread_results(client, monkeypatch):
 
 
 def test_articles_reports_weread_failure(client, monkeypatch):
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
     _install_weread(monkeypatch, error=WereadError(-2012, "login timeout", retriable=False))
 
     body = client.get("/api/public/articles", params={"fakeid": FAKEID}).json()
@@ -117,7 +104,6 @@ def test_articles_reports_weread_failure(client, monkeypatch):
 
 def test_article_falls_back_to_weread_content(client, monkeypatch):
     """后台没登录时，带上 fakeid 仍可通过微信读书拿到正文。"""
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
     _install_weread(monkeypatch, content='<div id="js_content"><p>读书正文</p></div>')
 
     r = client.post("/api/article", json={
@@ -130,7 +116,6 @@ def test_article_falls_back_to_weread_content(client, monkeypatch):
 
 
 def test_article_without_fakeid_explains_what_is_missing(client, monkeypatch):
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
     _install_weread(monkeypatch, content="<p>x</p>")
 
     body = client.post("/api/article",
@@ -141,7 +126,6 @@ def test_article_without_fakeid_explains_what_is_missing(client, monkeypatch):
 
 def test_article_long_link_not_supported_by_weread(client, monkeypatch):
     """长链没有短链 token，推不出 reviewId —— 提示要说清楚。"""
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
     _install_weread(monkeypatch, content="<p>x</p>")
 
     body = client.post("/api/article", json={
@@ -152,14 +136,13 @@ def test_article_long_link_not_supported_by_weread(client, monkeypatch):
     assert "短链" in body["error"]
 
 
-def test_article_requires_some_channel(client, monkeypatch):
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
+def test_article_requires_login(client, monkeypatch):
     monkeypatch.delenv("WEREAD_COOKIE", raising=False)
 
     body = client.post("/api/article",
                        json={"url": "https://mp.weixin.qq.com/s/tok1"}).json()
     assert body["success"] is False
-    assert "扫码登录" in body["error"]
+    assert "未配置" in body["error"]
 
 
 # ── /api/weread/* ────────────────────────────────────────

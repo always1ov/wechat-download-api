@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 
 from utils import rss_store
 from utils import weread_client as wc
-from utils.auth_manager import auth_manager
 from utils.rss_poller import rss_poller
 from utils.weread_client import WereadClient
 
@@ -29,8 +28,6 @@ def _clean(monkeypatch, tmp_path):
     monkeypatch.setenv("WEREAD_AUTO_ADD_SHELF", "false")
     monkeypatch.setenv("WEREAD_AUTO_RENEW", "false")
     monkeypatch.setenv("RSS_FETCH_FULL_CONTENT", "false")
-    monkeypatch.delenv("ARTICLE_SOURCE", raising=False)
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
     wc.reset_shelf_cache()
     rss_store.add_subscription(FAKEID, nickname="测试号")
     yield

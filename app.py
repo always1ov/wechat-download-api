@@ -25,30 +25,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
 # 导入路由
-from routes import article, articles, search, admin, login, image, health, stats, rss, account, feed, export, weread
+from routes import article, articles, search, admin, image, health, stats, rss, feed, export, weread
 from utils.rss_store import init_db
 from utils.rss_poller import rss_poller
 
 API_DESCRIPTION = """
-微信公众号文章下载 API，支持文章解析、公众号搜索、文章列表获取等功能。
+微信公众号文章获取 / RSS 订阅 API，数据源为**微信读书**。
+
+## 为什么是微信读书
+
+公众号后台（mp.weixin.qq.com）那条路有三个绕不开的坑：凭证约 4 天过期、
+appmsgpublish 有频率风控、正文页直抓会触发验证码。而且它要求你**拥有一个公众号**。
+微信读书用自己的登录态，还能直接从书架拿到你关注的公众号 —— 本项目因此只走这一条路。
 
 ## 快速开始
 
-1. 访问 `/login.html` 扫码登录微信公众号后台
-2. 调用 `GET /api/public/searchbiz?query=公众号名称` 搜索目标公众号
-3. 从返回结果中取 `fakeid`，调用 `GET /api/public/articles?fakeid=xxx` 获取文章列表
-4. 对每篇文章调用 `POST /api/article` 获取完整内容
+1. 访问 `/login.html` 扫码登录**微信读书**
+2. `POST /api/weread/shelf/import` 把书架上的公众号一键导入为订阅（会立即采集一次）
+3. RSS 地址：`/api/rss/{fakeid}`，聚合源 `/api/rss/all`
+
+也可以手动来：`GET /api/public/searchbiz?query=名称` 搜号 →
+`POST /api/rss/subscribe` 订阅 → `GET /api/public/articles?fakeid=xxx` 看列表。
 
 ## 认证说明
 
-所有核心接口都需要先登录。登录后凭证自动保存到 `.env` 文件，服务重启后无需重新登录（有效期约 4 天）。
-
-## 微信读书备用通道
-
-公众号后台凭证约 4 天过期，且 appmsgpublish 有频率风控、正文直抓会触发验证码。
-配置微信读书 Cookie（`POST /api/weread/cookie` 或 `WEREAD_COOKIE` 环境变量）后，
-后台不可用时文章列表与正文会自动改走 weread.qq.com，采集不中断。
-取数策略由 `ARTICLE_SOURCE` 控制：`auto`（默认，后台优先）/ `mp` / `weread`。
+只需要微信读书登录态，扫码后存在 `data/.weread.json`，服务重启不丢。
+`wr_skey` 过期会自动用 `wr_rt` 续期，不用重新扫码。
+排障用 `GET /api/weread/diagnose`。
 """
 
 
@@ -60,7 +63,7 @@ async def lifespan(app: FastAPI):
         print("\n" + "=" * 60)
         print("[OK] .env file loaded")
         print("=" * 60 + "\n")
-    elif os.getenv("SITE_URL") or os.getenv("WECHAT_TOKEN") or os.getenv("WEREAD_COOKIE"):
+    elif os.getenv("SITE_URL") or os.getenv("WEREAD_COOKIE"):
         # docker compose 用 env_file 注入时容器内没有 .env 文件，这是正常的，
         # 不该报警吓人 —— 配置已经在环境变量里了。
         print("\n" + "=" * 60)
@@ -78,10 +81,6 @@ async def lifespan(app: FastAPI):
     _skip_bg = os.getenv("SKIP_BACKGROUND_TASKS", "").lower() in ("1", "true", "yes")
     if not _skip_bg:
         await rss_poller.start()
-
-        # 启动登录过期提醒器（自动检测凭证有效期并 webhook 通知）
-        from utils.login_reminder import login_reminder
-        await login_reminder.start()
     else:
         logger.warning("SKIP_BACKGROUND_TASKS 已开 → 轮询器/登录提醒未启动（仅本地测试用）")
 
@@ -96,7 +95,6 @@ async def lifespan(app: FastAPI):
         yield
 
     if not _skip_bg:
-        await login_reminder.stop()
         await rss_poller.stop()
 
 
@@ -155,9 +153,7 @@ app.include_router(stats.router, prefix="/api", tags=["统计信息"])
 app.include_router(article.router, prefix="/api", tags=["文章内容"])
 app.include_router(articles.router, prefix="/api/public", tags=["文章列表"])  # 必须先注册
 app.include_router(search.router, prefix="/api/public", tags=["公众号搜索"])  # 后注册
-app.include_router(account.router, prefix="/api/public", tags=["公众号信息"])
 app.include_router(admin.router, prefix="/api/admin", tags=["管理"])
-app.include_router(login.router, prefix="/api/login", tags=["登录"])
 app.include_router(image.router, prefix="/api", tags=["图片代理"])
 app.include_router(rss.router, prefix="/api", tags=["RSS 订阅"])
 app.include_router(feed.router, prefix="/api", tags=["Feed（文章列表 / markdown 导出）"])
@@ -236,13 +232,8 @@ async def admin_page():
 
 @app.get("/login.html", include_in_schema=False)
 async def login_page():
-    """登录页面"""
+    """微信读书扫码登录页"""
     return FileResponse(static_dir / "login.html")
-
-@app.get("/verify.html", include_in_schema=False)
-async def verify_page():
-    """验证页面"""
-    return FileResponse(static_dir / "verify.html")
 
 @app.get("/rss.html", include_in_schema=False)
 async def rss_page():

@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 import routes.search as search_mod
 from utils import rss_store
 from utils import weread_client as wc
-from utils.auth_manager import auth_manager
 from utils.rss_poller import rss_poller
 from utils.weread_client import WereadClient
 
@@ -33,7 +32,6 @@ def _clean(monkeypatch, tmp_path):
     monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=42; wr_skey=k; wr_rt=web%40rt")
     monkeypatch.setenv("WEREAD_PAGE_INTERVAL", "0")
     monkeypatch.setenv("WEREAD_AUTO_RENEW", "false")
-    monkeypatch.delenv("ARTICLE_SOURCE", raising=False)
     wc.reset_shelf_cache()
     yield
     for f in (FAKEID_A, FAKEID_B):
@@ -106,7 +104,6 @@ async def test_shelf_listing_marks_accounts_on_shelf(monkeypatch):
 
 async def test_search_falls_back_to_shelf_when_store_search_dead(monkeypatch):
     """没有公众号后台、i 域又不通时，至少能从书架里找到已关注的号。"""
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
 
     def handler(request):
         if request.url.path == "/store/search":
@@ -122,7 +119,6 @@ async def test_search_falls_back_to_shelf_when_store_search_dead(monkeypatch):
 
 
 async def test_shelf_search_matches_nothing_returns_empty(monkeypatch):
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
 
     def handler(request):
         if request.url.path == "/store/search":

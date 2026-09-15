@@ -13,8 +13,8 @@ import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from utils.auth_manager import auth_manager
-from utils import rss_store
+from utils import rss_store, weread_client
+from utils.weread_client import WereadClient, WereadError, weread_auth
 
 router = APIRouter()
 
@@ -22,31 +22,49 @@ router = APIRouter()
 # ── 状态管理 ─────────────────────────────────────────────
 
 class StatusResponse(BaseModel):
-    """状态响应模型"""
+    """登录状态（微信读书）"""
     authenticated: bool
     loggedIn: bool
     account: str
     nickname: Optional[str] = ""
-    fakeid: Optional[str] = ""
-    expireTime: Optional[int] = 0
-    isExpired: Optional[bool] = False
+    vid: Optional[str] = ""
+    envManaged: Optional[bool] = False
     status: str
 
 
 @router.get("/status", response_model=StatusResponse, summary="获取登录状态")
 async def get_status():
-    """获取当前登录状态"""
-    return auth_manager.get_status()
+    """当前微信读书登录状态。
+
+    本项目只用微信读书，这里报告的就是微信读书的登录态。
+    """
+    info = weread_auth.get_info()
+    ok = bool(info.get("configured"))
+    vid = info.get("vid", "")
+    return StatusResponse(
+        authenticated=ok,
+        loggedIn=ok,
+        account=f"微信读书用户 {vid}" if vid else ("已登录" if ok else ""),
+        nickname=f"微信读书用户 {vid}" if vid else "",
+        vid=vid,
+        envManaged=bool(info.get("env_managed")),
+        status="登录正常" if ok else "未登录",
+    )
 
 
 @router.post("/logout", summary="退出登录")
 async def logout():
-    """退出登录，清除凭证"""
-    success = auth_manager.clear_credentials()
-    if success:
-        return {"success": True, "message": "已退出登录"}
-    else:
-        return {"success": False, "message": "退出登录失败"}
+    """清除微信读书登录态。
+
+    环境变量 WEREAD_COOKIE 托管时清不掉（不会去改部署配置），会如实告知。
+    """
+    if weread_auth.is_env_managed():
+        weread_auth.clear()
+        return {"success": False,
+                "message": "已清除本地保存的登录态，但 WEREAD_COOKIE 环境变量仍然生效，"
+                           "需要改部署配置才能真正退出"}
+    ok = weread_auth.clear()
+    return {"success": ok, "message": "已退出登录" if ok else "退出登录失败"}
 
 
 # ── 黑名单管理 ─────────────────────────────────────────────
@@ -265,14 +283,10 @@ async def fetch_history_articles(req: FetchHistoryRequest):
     获取公众号的历史文章并存入数据库。
     简化版：直接调用微信 API 获取历史文章列表，不涉及用户权限和付费逻辑。
     """
-    from utils.auth_manager import auth_manager
-    
-    # 检查登录状态
-    status = auth_manager.get_status()
-    if not status.get("authenticated"):
+    if not weread_client.is_enabled():
         return FetchHistoryResponse(
             success=False,
-            message="未登录，请先扫码登录",
+            message=weread_client.COOKIE_MISSING_MSG,
             fetched_count=0,
             new_count=0
         )
@@ -311,141 +325,26 @@ async def fetch_history_articles(req: FetchHistoryRequest):
 
 
 async def _fetch_history_internal(fakeid: str, target_count: int) -> tuple:
+    """通过微信读书深翻文章列表，标记为 source='deep_fetch' 入库。
+
+    翻页深度受 WEREAD_MAX_PAGES 限制（默认 5 页、每页约 50 条）；想挖更深就调大它。
+    数据库的 UNIQUE(fakeid, link) 负责去重：轮询器已拉到的保持 source='poll'，
+    只有这里新拿到的才记为 deep_fetch。
+
+    返回 (本次取回篇数, 新增篇数)。
     """
-    内部历史文章获取逻辑。
-    
-    历史文章定义：通过深度获取功能拉取的文章（标记为 source='deep_fetch'）
-    
-    流程：
-    1. 获取数据库中已有的历史文章数量（source='deep_fetch'）
-    2. 从已有历史文章的位置开始翻页，避免重复获取
-    3. 保存所有抓取的文章，标记为 source='deep_fetch'
-    4. 数据库通过 UNIQUE(fakeid, link) 自动去重：
-       - 轮询器已拉取的文章保持 source='poll'（不更新）
-       - 只有新文章被标记为 source='deep_fetch'
-    5. 达到目标数量或无更多文章时停止
-    
-    返回 (fetched_count, new_count)。
-    """
-    import httpx
-    import json
-    import asyncio
-    import random
-    
-    creds = auth_manager.get_credentials()
-    if not creds or not creds.get("token"):
-        raise ValueError("登录凭证无效")
-    
-    # 验证订阅是否存在
     sub = rss_store.get_subscription(fakeid)
     if not sub:
         raise ValueError("订阅不存在")
-    
-    # 获取数据库中已有的历史文章数量（source='deep_fetch'），从这个位置开始翻页
-    existing_historical = rss_store.count_historical_articles(fakeid)
-    
-    historical_articles = []
-    batch_size = 10
-    # 从已有历史文章位置开始（跳过已获取的）
-    start_batch = existing_historical // batch_size
-    batch_num = start_batch
-    max_batches = start_batch + 50  # 最多再翻 50 页
-    
-    while batch_num < max_batches and len(historical_articles) < target_count:
-        begin = batch_num * batch_size
-        
-        params = {
-            "begin": begin,
-            "count": batch_size,
-            "fakeid": fakeid,
-            "type": "101_1",
-            "free_publish_type": 1,
-            "sub_action": "list_ex",
-            "token": creds["token"],
-            "lang": "zh_CN",
-            "f": "json",
-            "ajax": 1,
-        }
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://mp.weixin.qq.com/",
-            "Cookie": creds["cookie"],
-        }
-        
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(
-                "https://mp.weixin.qq.com/cgi-bin/appmsgpublish",
-                params=params,
-                headers=headers,
+
+    try:
+        async with WereadClient() as client:
+            articles = await client.list_articles(
+                fakeid, limit=target_count, nickname=sub.get("nickname", "")
             )
-            resp.raise_for_status()
-            result = resp.json()
-        
-        base_resp = result.get("base_resp", {})
-        ret_code = base_resp.get("ret", -1)
-        
-        if ret_code == 200003:
-            raise ValueError("触发验证码，请稍后重试")
-        if ret_code != 0:
-            raise ValueError(f"微信API错误: ret={ret_code}")
-        
-        publish_page = result.get("publish_page", {})
-        if isinstance(publish_page, str):
-            try:
-                publish_page = json.loads(publish_page)
-            except (json.JSONDecodeError, ValueError):
-                batch_num += 1
-                continue
-        
-        if not isinstance(publish_page, dict):
-            batch_num += 1
-            continue
-        
-        batch_articles = []
-        
-        for item in publish_page.get("publish_list", []):
-            publish_info = item.get("publish_info", {})
-            if isinstance(publish_info, str):
-                try:
-                    publish_info = json.loads(publish_info)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-            if not isinstance(publish_info, dict):
-                continue
-            for a in publish_info.get("appmsgex", []):
-                # [2026-05-06 简化] 不需要时间判断
-                # 数据库有唯一约束 UNIQUE(fakeid, link)
-                # 轮询器已拉取的文章（source='poll'）会保持原样
-                # 只有新文章才会被标记为 source='deep_fetch'
-                batch_articles.append({
-                    "aid": a.get("aid", ""),
-                    "title": a.get("title", ""),
-                    "link": a.get("link", ""),
-                    "digest": a.get("digest", ""),
-                    "cover": a.get("cover", ""),
-                    "author": a.get("author", ""),
-                    "publish_time": a.get("update_time", 0),
-                })
-        
-        if batch_articles:
-            historical_articles.extend(batch_articles)
-        
-        # 检查停止条件
-        articles_in_page = len(publish_page.get("publish_list", []))
-        if articles_in_page < batch_size:
-            # 没有更多文章了
-            break
-        
-        batch_num += 1
-        
-        # 延迟避免频繁请求
-        if len(historical_articles) < target_count:
-            await asyncio.sleep(random.uniform(2, 4))
-    
-    # 截取到目标数量
-    historical_articles = historical_articles[:target_count]
-    
-    # 保存到数据库（去重），标记为历史文章 'deep_fetch'
-    new_count = rss_store.save_articles(fakeid, historical_articles, source='deep_fetch')
-    
-    return len(historical_articles), new_count
+    except WereadError as e:
+        raise ValueError(e.user_message) from e
+
+    articles = articles[:target_count]
+    new_count = rss_store.save_articles(fakeid, articles, source="deep_fetch")
+    return len(articles), new_count

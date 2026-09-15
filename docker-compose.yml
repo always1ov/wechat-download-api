@@ -42,7 +42,6 @@ services:
       # 不用在这里填 Cookie —— 管理页点「扫码登录微信读书」更省事，
       # 扫完存在 ./data 里，过期还能用 wr_rt 自动续期。
       WEREAD_COOKIE: ${WEREAD_COOKIE:-}
-      ARTICLE_SOURCE: ${ARTICLE_SOURCE:-auto}          # auto=后台优先读书兜底 / mp / weread
       WEREAD_AUTO_RENEW: ${WEREAD_AUTO_RENEW:-true}    # wr_skey 过期自动用 wr_rt 续期
       WEREAD_APP_API: ${WEREAD_APP_API:-true}          # App 域接口（多一个「搜公众号」能力）
       WEREAD_AUTO_ADD_SHELF: ${WEREAD_AUTO_ADD_SHELF:-true}
@@ -54,10 +53,6 @@ services:
       RSS_POLL_INTERVAL: ${RSS_POLL_INTERVAL:-3600}    # 轮询间隔（秒）
       ARTICLES_PER_POLL: ${ARTICLES_PER_POLL:-10}
       RSS_FETCH_FULL_CONTENT: ${RSS_FETCH_FULL_CONTENT:-true}
-
-      # ── 抓正文时分散 IP，降低风控概率 ──────────────────────
-      # 例: socks5://ip1:1080,socks5://ip2:1080
-      PROXY_URLS: ${PROXY_URLS:-}
 
       # ── 限频 ────────────────────────────────────────────
       RATE_LIMIT_GLOBAL: ${RATE_LIMIT_GLOBAL:-10}

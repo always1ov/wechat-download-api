@@ -73,7 +73,6 @@ def _clean_env(monkeypatch, tmp_path):
     monkeypatch.setattr(wc.weread_auth, "credentials_file", tmp_path / ".weread.json")
     monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=test")
     monkeypatch.delenv("WEREAD_ENABLED", raising=False)
-    monkeypatch.delenv("ARTICLE_SOURCE", raising=False)
     # 关掉限速，测试不用真等
     monkeypatch.setenv("WEREAD_CONTENT_INTERVAL", "0")
     monkeypatch.setenv("WEREAD_PAGE_INTERVAL", "0")

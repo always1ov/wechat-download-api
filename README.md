@@ -24,12 +24,11 @@
 - **MCP · AI 客户端接入** — 内置 MCP 服务，Claude / Codex / Cline / Cursor 等 AI 客户端可**直接搜索、订阅、读文章**（6 个工具，静态 Token 鉴权，单用户自托管无需 OAuth）
 - **文章内容获取** — 通过 URL 获取文章完整内容（标题、作者、正文 HTML / 纯文本、图片列表）
 - **多格式导出** — 单篇 markdown 增量同步（带 YAML frontmatter，导入 Obsidian / Logseq）；整号文章一键打包成 **Markdown / HTML / Word / PDF / EPUB / Excel / JSON** 7 种格式（Word/PDF/EPUB 图片内嵌离线可看），纯读本地库、不触发抓取
-- **微信读书备用通道** — 公众号后台凭证过期 / 触发频率风控 / 正文抓取遇验证码时，自动改走 [weread.qq.com](https://weread.qq.com) 取**搜索、文章列表和正文**，采集不中断；**支持扫码登录**，登录态过期还能用 `wr_rt` 自动续期（见 [微信读书备用通道](#微信读书备用通道)）
-- **反风控体系** — Chrome TLS 指纹模拟 + SOCKS5 代理池轮转 + 三层自动限频，有效对抗微信封控
-- **文章列表 & 搜索** — 获取任意公众号历史文章列表，支持分页和关键词搜索
-- **公众号搜索** — 按名称搜索公众号，获取 FakeID
-- **公众号主体信息** — 获取公众号认证主体、认证状态、原创文章数等详细信息
-- **扫码登录** — 微信公众平台扫码登录，凭证自动保存，4 天有效期
+- **不需要微信公众号** — 数据源是[微信读书](https://weread.qq.com)：扫码登录后，把你在微信读书里关注的公众号一键导入成订阅即可（见 [微信读书通道](#微信读书通道)）
+- **扫码登录 + 自动续期** — 微信扫一下完成登录；`wr_skey` 过期自动用 `wr_rt` 换新，不用反复扫码
+- **从书架发现公众号** — 微信读书 App 里关注谁，这里就能列出谁，一键批量导入
+- **文章列表 & 搜索** — 获取公众号文章列表，支持分页和关键词过滤
+- **链路诊断** — `GET /api/weread/diagnose` 把登录态、书架、列表、正文逐步跑一遍，指出卡在哪
 - **图片代理** — 代理微信 CDN 图片，解决防盗链问题
 - **Webhook 通知** — 登录过期提醒（提前24h/6h预警+已过期通知）、触发验证等事件自动推送（支持企业微信机器人）
 - **API 文档** — 自动生成 Swagger UI / ReDoc，在线调试所有接口
@@ -125,23 +124,20 @@ docker run -d \
 
 ## 使用前提
 
-> **没有微信公众号也能用**：扫码登录微信读书后，可以把你在微信读书里关注的公众号
-> 一键导入成 RSS 订阅（管理页「从书架导入公众号」，或 `POST /api/weread/shelf/import`）。
-> 这条路完全不碰公众号后台。下面讲的是公众号后台那条路，两条可以只用其一。
+**不需要微信公众号。** 本服务的数据全部来自微信读书：
 
-> 走公众号后台需要：
+1. 在**微信读书 App** 里关注你想订阅的公众号
+2. 部署后打开 `/login.html`，用微信扫码登录微信读书
+3. 管理页点「从书架导入公众号」，一键变成 RSS 订阅
 
-1. **拥有一个微信公众号**（订阅号、服务号均可）
-2. 部署并启动服务后，访问登录页面用**公众号管理员微信**扫码登录
-3. 登录成功后凭证自动保存到 `.env` 文件，有效期约 **4 天**，过期后需重新扫码
+登录态存在 `data/` 目录，重启不丢；`wr_skey` 过期会自动用 `wr_rt` 续期，一般不用反复扫码。
 
-登录后即可通过 API 获取**任意公众号**的公开文章（不限于自己的公众号）。
-
-> **本地电脑可以直接使用！** 不需要公网服务器——在本地启动服务后通过 `localhost` 访问即可完成扫码登录和全部功能。只有当你需要从其他设备（如手机 RSS 阅读器）远程访问时，才需要公网服务器或内网穿透。
+> **本地电脑可以直接用**，不需要公网服务器 —— 本地起服务后通过 `localhost` 访问即可。
+> 只有当你要从其他设备（如手机 RSS 阅读器）远程访问时，才需要公网服务器或内网穿透。
 
 ---
 
-## 微信读书备用通道
+## 微信读书通道
 
 公众号后台这条路有三个绕不开的坑：**凭证约 4 天过期**、`appmsgpublish` **有频率风控**、正文页直抓**会触发验证码**。任意一个踩中，轮询器和文章接口就会静默失联——表现就是「RSS 不更新了」「文章拿不到正文」。
 
@@ -216,20 +212,14 @@ App 域按「能用就用」处理：不通（401/风控）就记一笔，10 分
 
 > App 域对登录态要求更严，正好吃我们自建的 `/web/login/renewal` 续期结果。**这条路尚未在真实账号上验证过**，验不通也不会让现有功能变坏。可以用 `GET /api/weread/search?query=xxx` 单独试。
 
-### 生效方式
+### 取数路径
 
-默认 `ARTICLE_SOURCE=auto`，**公众号后台优先**，只有后台明确出错才回退，不会平白多打微信读书：
-
-| 场景 | 行为 |
-|------|------|
-| RSS 轮询时后台报登录过期 / 频率风控 | 文章列表自动改走微信读书 |
-| 后台完全没登录 | 整轮轮询全部走微信读书 |
-| 正文直抓命中验证码 / 风控页 | 用微信读书正文接口补齐该篇正文 |
-| 后台报 `invalid args`（号已注销/改名） | 先问微信读书；读书也拿不到才拉黑该号 |
-| 后台一切正常 | 照常走后台，微信读书不发请求 |
-| **搜公众号**时后台没登录 / 报错 | 改用微信读书 App 域 `/store/search` 搜 |
-
-想钉死某一条通道，把 `ARTICLE_SOURCE` 设成 `mp`（只用后台）或 `weread`（只用微信读书）。
+| 环节 | 走哪个接口 | 不通时 |
+|------|-----------|--------|
+| 找公众号 | App 域 `/store/search` | 退回在**自己书架**里按名字匹配 |
+| 文章列表 | 网页域 `/web/mp/articles` | → App 域 `/book/articles` → `/api/mp/cover`（只有最新一篇） |
+| 文章正文 | 网页域 `/web/mp/content` | 元数据仍入库，RSS 里可点开原文 |
+| 登录态 | 扫码 / `WEREAD_COOKIE` | `wr_skey` 过期自动用 `wr_rt` 续期 |
 
 > **关于书架**：微信读书只对**书架上**的公众号返回文章列表，所以采集前会自动把公众号加入书架（相当于在微信读书里关注它）。不想改动自己的书架就设 `WEREAD_AUTO_ADD_SHELF=false`，然后手动在微信读书 App 里关注这些号。
 
@@ -475,7 +465,7 @@ claude mcp add --transport http wechatrss https://你的域名/mcp \
 
 > 以下 HTTP 接口**无需鉴权**：调用方不用传任何 Token 或 `Authorization` 头。微信登录态由服务端扫码登录后内部持有并自动使用（前提是管理页面已扫码登录）。`MCP_TOKEN` / `Authorization: Bearer` 仅用于上面的 MCP 客户端接入，与这些 HTTP 接口无关。
 >
-> 文章解析与公众号搜索/文章列表接口（`/api/article`、`/api/public/searchbiz`、`/api/public/accountinfo`、`/api/public/articles`、`/api/public/articles/search`）统一返回 `{ "success": bool, "data": {...}, "error": null }`，**业务数据都在 `data` 字段下**；业务失败（如登录态失效）返回 HTTP 200 且 `success: false`，请以 `success` 字段判断成败。（增量同步接口 `/api/feed/articles.json` 与 `/api/health` 直接返回数据对象、不带此包装；RSS 接口返回 XML；`/api/feed/article/{id}.md` 返回 markdown 文本。）
+> 文章解析与公众号搜索/文章列表接口（`/api/article`、`/api/public/searchbiz`、`/api/public/articles`、`/api/public/articles/search`）统一返回 `{ "success": bool, "data": {...}, "error": null }`，**业务数据都在 `data` 字段下**；业务失败（如登录态失效）返回 HTTP 200 且 `success: false`，请以 `success` 字段判断成败。（增量同步接口 `/api/feed/articles.json` 与 `/api/health` 直接返回数据对象、不带此包装；RSS 接口返回 XML；`/api/feed/article/{id}.md` 返回 markdown 文本。）
 
 ### 获取文章内容
 
@@ -537,38 +527,6 @@ curl "http://localhost:5000/api/public/searchbiz?query=公众号名称"
 - `round_head_img` — 头像地址（已转为服务器图片代理链接）
 - `service_type` — 类型（`0`=订阅号 / `1`=服务号 / `2`=企业号）
 - `data.total` — 匹配数量（已过滤黑名单后的条数）
-
-### 获取公众号主体信息
-
-`GET /api/public/accountinfo` — 获取公众号的认证主体、认证状态、原创文章数等信息
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `fakeid` | string | 是 | 公众号的 FakeID（从搜索接口获取） |
-
-请求示例：
-
-```bash
-curl "http://localhost:5000/api/public/accountinfo?fakeid=YOUR_FAKEID"
-```
-
-返回示例：
-
-```json
-{
-  "success": true,
-  "data": {
-    "identity_name": "腾讯科技(深圳)有限公司",
-    "is_verify": 2,
-    "original_article_count": 15234
-  }
-}
-```
-
-返回字段：
-- `identity_name` — 认证主体名称（公司/机构名称）
-- `is_verify` — 认证状态（`0`=未认证, `1`=微信认证, `2`=新媒体认证）
-- `original_article_count` — 原创文章总数
 
 ### 获取文章列表
 
@@ -679,7 +637,7 @@ curl "http://localhost:5000/api/rss/MzA1MjM1ODk2MA=="
 
 > **关于 RSS 内容**: RSS 源包含**完整文章内容**（图文混排），您可以直接在 RSS 阅读器中阅读全文。
 >
-> 系统使用 **SOCKS5 代理池 + Chrome TLS 指纹模拟**技术获取文章内容，有效规避微信风控。
+> 正文来自微信读书的 `/web/mp/content`，不直抓 mp.weixin.qq.com，因此没有验证码风控问题。
 >
 > 扫码登录后，系统会**自动**将微信凭证用于内容获取，无需手动配置。如需禁用完整内容获取（仅保留标题和摘要），可在 `.env` 中设置 `RSS_FETCH_FULL_CONTENT=false`。
 
@@ -765,11 +723,8 @@ curl -OJ "http://localhost:5000/api/export/account/MzA1MjM1ODk2MA==.epub?since=$
 | `GET` | `/api/image?url=IMG_URL` | 图片代理（仅限微信 CDN 域名） |
 | `GET` | `/api/health` | 健康检查 |
 | `GET` | `/api/stats` | 限频统计 |
-| `POST` | `/api/login/session/{id}` | 初始化登录会话 |
-| `GET` | `/api/login/getqrcode` | 获取登录二维码 |
-| `GET` | `/api/login/scan` | 检查扫码状态 |
-| `POST` | `/api/login/bizlogin` | 完成登录 |
-| `GET` | `/api/login/info` | 获取登录信息 |
+| `POST` | `/api/weread/qrcode` | 获取微信读书登录二维码 |
+| `GET` | `/api/weread/qrcode/status` | 查询扫码状态 |
 | `GET` | `/api/admin/status` | 查询登录状态 |
 | `GET` | `/api/weread/status` | 微信读书通道状态（详见 [微信读书备用通道](#微信读书备用通道)） |
 | `POST` | `/api/admin/logout` | 退出登录 |
@@ -788,10 +743,6 @@ cp env.example .env
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `WECHAT_TOKEN` | 微信 Token（登录后自动填充） | - |
-| `WECHAT_COOKIE` | 微信 Cookie（登录后自动填充） | - |
-| `WECHAT_FAKEID` | 公众号 FakeID（登录后自动填充） | - |
-| `WECHAT_EXPIRE_TIME` | 凭证过期时间（登录后自动填充） | - |
 | `WEBHOOK_URL` | Webhook 通知地址（支持企业微信机器人） | 空 |
 | `WEBHOOK_NOTIFICATION_INTERVAL` | 同一事件通知最小间隔（秒） | 300 |
 | `RATE_LIMIT_GLOBAL` | 全局每分钟请求上限 | 10 |
@@ -800,11 +751,9 @@ cp env.example .env
 | `RSS_POLL_INTERVAL` | RSS 轮询间隔（秒） | 3600 |
 | `ARTICLES_PER_POLL` | 每次轮询每个公众号拉取的文章批次数 | 10 |
 | `RSS_FETCH_FULL_CONTENT` | RSS 是否获取完整内容（true/false） | true |
-| `PROXY_URLS` | **SOCKS5 代理池地址（强烈建议配置，避免账号风控）** | 空 |
 | `WEREAD_COOKIE` | **微信读书 Cookie（后台失效时的备用通道，强烈建议配置；也可在管理页扫码登录）** | 空 |
 | `WEREAD_AUTO_RENEW` | wr_skey 过期时自动用 wr_rt 续期 | true |
 | `WEREAD_APP_API` | 启用微信读书 App 域接口（`i.weread.qq.com`，多一个搜公众号能力） | true |
-| `ARTICLE_SOURCE` | 取数策略：`auto` / `mp` / `weread` | auto |
 | `WEREAD_ENABLED` | 强制开关微信读书通道（留空=配了 Cookie 就启用） | 空 |
 | `WEREAD_AUTO_ADD_SHELF` | 采集前自动把公众号加入微信读书书架 | true |
 | `WEREAD_CONTENT_INTERVAL` | 微信读书正文请求最小间隔（秒） | 2 |
@@ -819,95 +768,6 @@ cp env.example .env
 > - 本地开发: `http://localhost:5000`
 > - 局域网部署: `http://192.168.1.100:5000`
 > - 公网域名: `https://你的域名.com`
-
-### SOCKS5 代理池配置（⚠️ 强烈建议）
-
-**重要提示**: 
-- ⚠️ **启用完整内容获取时，强烈建议配置代理池，避免账号被微信风控**
-- ⚠️ **不配置代理直连微信可能导致：频繁验证、账号限制、IP封禁**
-- ✅ **配置2-3个代理IP可有效分散请求，降低风控风险**
-
-**用途**：获取文章完整内容时分散请求 IP，配合 Chrome TLS 指纹模拟，有效规避微信风控。
-
-> 本项目使用 `curl_cffi` 模拟 Chrome TLS 指纹，请求特征与真实浏览器一致，配合代理池效果更佳。
-
-**方案：多台 VPS 自建 SOCKS5 代理**
-
-准备 2-3 台低价 VPS（各大云厂商轻量应用服务器即可，¥20-30/月/台），每台运行一个 SOCKS5 代理服务。推荐 [gost](https://github.com/go-gost/gost)（Go 语言实现，单二进制文件，无依赖）。
-
-**第一步：在每台 VPS 上安装 gost**
-
-```bash
-# 下载最新版（以 Linux amd64 为例，其他架构请去 GitHub Releases 页面选择）
-# 国外服务器直接下载
-wget https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_linux_amd64.tar.gz
-
-# 国内服务器使用加速镜像（任选一个可用的）
-wget https://gh-proxy.com/https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_linux_amd64.tar.gz
-# 或
-wget https://ghproxy.cc/https://github.com/go-gost/gost/releases/download/v3.2.6/gost_3.2.6_linux_amd64.tar.gz
-
-# 解压并移动到系统路径
-tar -xzf gost_3.2.6_linux_amd64.tar.gz
-mv gost /usr/local/bin/
-chmod +x /usr/local/bin/gost
-
-# 验证安装
-gost -V
-```
-
-**第二步：启动 SOCKS5 代理服务**
-
-```bash
-# 带用户名密码认证（推荐，替换 myuser / mypass 和端口）
-gost -L socks5://myuser:mypass@:1080
-
-# 不带认证（仅内网或已配置防火墙时使用）
-gost -L socks5://:1080
-```
-
-**第三步：配置为 systemd 服务（开机自启）**
-
-```bash
-cat > /etc/systemd/system/gost.service << 'EOF'
-[Unit]
-Description=GOST Proxy
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/gost -L socks5://myuser:mypass@:1080
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable gost
-systemctl start gost
-```
-
-**第四步：开放防火墙端口**
-
-```bash
-# 仅允许你的主服务器 IP 连接（替换为实际 IP）
-ufw allow from YOUR_MAIN_SERVER_IP to any port 1080
-
-# 或者如果用的是云厂商安全组，在控制台添加入站规则：
-# 端口 1080 / TCP / 来源 IP 限制为你的主服务器
-```
-
-**第五步：在主服务器 `.env` 中配置代理池**
-
-```bash
-PROXY_URLS=socks5://myuser:mypass@vps1-ip:1080,socks5://myuser:mypass@vps2-ip:1080,socks5://myuser:mypass@vps3-ip:1080
-```
-
-配置后重启服务，每次文章请求会轮流使用不同的代理 IP。可以通过 `GET /api/health` 确认代理池状态。留空则直连（默认行为）。
-
----
 
 ## 项目结构
 
@@ -1014,7 +874,7 @@ Cookie 登录有效期约 4 天，系统会：
 | **Web 框架** | FastAPI |
 | **ASGI 服务器** | Uvicorn |
 | **HTTP 客户端** | curl_cffi（Chrome TLS 指纹）/ HTTPX（降级） |
-| **反风控** | TLS 指纹模拟 + SOCKS5/HTTP 代理池轮转 |
+| **反风控** | 不直抓 mp.weixin.qq.com，改用微信读书接口，天然绕开验证码 |
 | **RSS 存储** | SQLite（零配置，数据本地化） |
 | **配置管理** | python-dotenv |
 | **运行环境** | Python 3.8+ |

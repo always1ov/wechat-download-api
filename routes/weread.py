@@ -82,12 +82,10 @@ async def weread_status():
     - `enabled`: 通道是否启用（默认「配了 Cookie 就启用」，可用 WEREAD_ENABLED 覆盖）
     - `env_managed`: Cookie 是否由 WEREAD_COOKIE 环境变量托管（是则管理页写入不生效）
     - `vid`: Cookie 里的 wr_vid
-    - `article_source`: 取数策略 auto / mp / weread
     - `auto_add_to_shelf`: 采集前是否自动把公众号加入书架
     """
     info = weread_auth.get_info()
     info.update({
-        "article_source": weread_client.article_source(),
         "auto_add_to_shelf": weread_client.auto_add_to_shelf(),
         "content_interval": weread_client.content_interval(),
         "page_interval": weread_client.page_interval(),

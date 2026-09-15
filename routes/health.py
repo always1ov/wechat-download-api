@@ -16,15 +16,17 @@ router = APIRouter()
 @router.get("/health", summary="健康检查")
 async def health_check():
     """
-    检查服务健康状态，包括 HTTP 引擎和代理池信息。
+    检查服务健康状态，并报告微信读书通道是否就绪。
     """
-    from utils.http_client import ENGINE_NAME
-    from utils.proxy_pool import proxy_pool
+    from utils import weread_client
 
     return {
         "status": "healthy",
         "version": "1.0.0",
         "framework": "FastAPI",
-        "http_engine": ENGINE_NAME,
-        "proxy_pool": proxy_pool.get_status(),
+        "source": "weread",
+        "weread": {
+            "configured": weread_client.weread_auth.is_configured(),
+            "app_api": weread_client.app_domain_usable(),
+        },
     }

@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""端到端：公众号后台完全没登录时，整轮轮询靠微信读书把文章（含正文）落库。
+"""端到端：一轮轮询把文章（含正文）从微信读书落库。
 
-这是本次修复要保证的核心行为 —— 后台凭证过期后 RSS 仍然更新。
+这是本项目的主路径 —— 没有公众号后台，全靠微信读书。
 """
 
 import pytest
 
-import utils.article_fetcher as article_fetcher
 from utils import rss_store
 from utils import weread_client as wc
-from utils.auth_manager import auth_manager
 from utils.rss_poller import rss_poller
 from utils.weread_client import WereadClient
 
@@ -28,30 +26,26 @@ def subscription():
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
     monkeypatch.setattr(wc.weread_auth, "credentials_file", tmp_path / ".weread.json")
-    monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=test")
+    monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=test; wr_rt=web%40rt")
     monkeypatch.setenv("WEREAD_CONTENT_INTERVAL", "0")
     monkeypatch.setenv("WEREAD_PAGE_INTERVAL", "0")
     monkeypatch.setenv("WEREAD_AUTO_ADD_SHELF", "false")
-    monkeypatch.delenv("ARTICLE_SOURCE", raising=False)
-    monkeypatch.delenv("WEREAD_ENABLED", raising=False)
-    # 公众号后台完全没登录
-    monkeypatch.setattr(auth_manager, "get_credentials", lambda: {})
+    monkeypatch.setenv("WEREAD_AUTO_RENEW", "false")
     wc.reset_shelf_cache()
     yield
     wc.reset_shelf_cache()
 
 
-async def test_poll_cycle_lands_articles_with_content(subscription, monkeypatch):
-    async def _must_not_scrape(*args, **kwargs):
-        raise AssertionError("不该直抓 mp.weixin.qq.com")
+async def _noop_sleep(_seconds):
+    return None
 
-    monkeypatch.setattr(article_fetcher, "fetch_articles_batch", _must_not_scrape)
-    monkeypatch.setattr(rss_poller, "_http_client", None)
+
+async def test_poll_cycle_lands_articles_with_content(subscription, monkeypatch):
     # 轮询器每个号之间会 sleep 3s，测试里跳过
     monkeypatch.setattr("utils.rss_poller.asyncio.sleep", _noop_sleep)
 
     async def _request(self, method, path, *, params=None, json_data=None,
-                       as_json=True, interval=0.0):
+                       as_json=True, interval=0.0, app=False):
         if path == "/web/mp/articles":
             if int(params.get("offset", 0)) != 0:
                 return {"reviews": []}
@@ -80,19 +74,14 @@ async def test_poll_cycle_lands_articles_with_content(subscription, monkeypatch)
     assert "微信读书拿到的正文" in stored[0]["plain_content"]
 
 
-async def test_poll_cycle_noop_without_any_channel(subscription, monkeypatch):
-    """两条通道都没有时，轮询安静跳过，不该炸也不该写库。"""
+async def test_poll_cycle_noop_without_login(subscription, monkeypatch):
+    """没有微信读书登录态时安静跳过，不该炸也不该写库。"""
     monkeypatch.delenv("WEREAD_COOKIE", raising=False)
 
     async def _must_not_run(*args, **kwargs):
-        raise AssertionError("不该发起任何采集请求")
+        raise AssertionError("未登录时不该发起任何采集请求")
 
     monkeypatch.setattr(WereadClient, "_request", _must_not_run)
-    monkeypatch.setattr(article_fetcher, "fetch_articles_batch", _must_not_run)
 
     await rss_poller._poll_all()
     assert rss_store.get_articles(FAKEID, limit=10) == []
-
-
-async def _noop_sleep(_seconds):
-    return None

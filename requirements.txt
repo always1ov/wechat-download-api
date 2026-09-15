@@ -4,7 +4,6 @@ uvicorn[standard]==0.34.0
 pydantic==2.13.4
 httpx==0.28.1
 python-dotenv==1.0.0
-curl_cffi>=0.7.0
 beautifulsoup4>=4.12.0
 # 微信读书扫码登录：本地生成登录二维码（图片保存依赖下方的 Pillow）
 qrcode>=7.4

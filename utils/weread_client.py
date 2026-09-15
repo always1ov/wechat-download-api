@@ -154,12 +154,6 @@ def is_enabled() -> bool:
     return bool(weread_auth.get_cookie())
 
 
-def article_source() -> str:
-    """文章来源策略：auto（后台优先、读书兜底）/ mp（只用后台）/ weread（只用读书）。"""
-    value = _env_str("ARTICLE_SOURCE", "auto").lower()
-    return value if value in ("auto", "mp", "weread") else "auto"
-
-
 # ── 错误 ─────────────────────────────────────────────────
 
 class WereadError(Exception):

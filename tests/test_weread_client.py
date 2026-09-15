@@ -214,11 +214,3 @@ def test_is_enabled_follows_cookie_and_override(tmp_path, monkeypatch):
     monkeypatch.setenv("WEREAD_ENABLED", "false")
     assert wc.is_enabled() is False
 
-
-def test_article_source_defaults_to_auto(monkeypatch):
-    monkeypatch.delenv("ARTICLE_SOURCE", raising=False)
-    assert wc.article_source() == "auto"
-    monkeypatch.setenv("ARTICLE_SOURCE", "WeRead")
-    assert wc.article_source() == "weread"
-    monkeypatch.setenv("ARTICLE_SOURCE", "nonsense")
-    assert wc.article_source() == "auto"

@@ -564,7 +564,7 @@
         <div class="header">
             <div class="header-left">
                 <h1>WeChat Download API</h1>
-                <p>微信公众号文章获取服务</p>
+                <p>微信公众号文章获取服务 · 数据源：微信读书</p>
             </div>
             <span class="version-tag">v1.0.0</span>
         </div>
@@ -602,13 +602,13 @@
                     </div>
                     <div>
                         <div class="card-title">快捷操作</div>
-                        <div class="card-desc">登录与验证</div>
+                        <div class="card-desc">登录与排障</div>
                     </div>
                 </div>
                 <ul class="nav-list">
-                    <li><a href="/login.html"><span>扫码登录</span><span class="arrow">&#8250;</span></a></li>
-                    <li><a href="/verify.html"><span>验证处理</span><span class="arrow">&#8250;</span></a></li>
+                    <li><a href="/login.html"><span>扫码登录微信读书</span><span class="arrow">&#8250;</span></a></li>
                     <li><a href="/rss.html"><span>RSS 订阅</span><span class="arrow">&#8250;</span></a></li>
+                    <li><a href="/api/weread/diagnose" target="_blank"><span>通道诊断</span><span class="arrow">&#8250;</span></a></li>
                 </ul>
             </div>
 
@@ -687,8 +687,8 @@
                         </svg>
                     </div>
                     <div>
-                        <div class="card-title">微信读书备用通道</div>
-                        <div class="card-desc">公众号后台凭证过期 / 触发风控时，自动改走微信读书继续采集</div>
+                        <div class="card-title">微信读书</div>
+                        <div class="card-desc">本服务唯一的数据源 —— 公众号发现、文章列表、正文全走它</div>
                     </div>
                 </div>
                 <div class="weread-status" id="wereadStatus">检查中...</div>
@@ -789,15 +789,10 @@
                     icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#52c41a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
                     val.textContent = data.nickname || data.account || '已登录';
 
-                    var detailParts = [];
-                    if (data.fakeid) detailParts.push('FakeID: ' + data.fakeid);
-                    if (data.isExpired) {
-                        detailParts.push('凭证可能已过期');
-                        icon.className = 'status-icon offline';
-                        icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#fa8c16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
-                    } else {
-                        detailParts.push(data.status);
-                    }
+                    var detailParts = ['微信读书'];
+                    if (data.vid) detailParts.push('vid: ' + data.vid);
+                    if (data.envManaged) detailParts.push('由 WEREAD_COOKIE 环境变量托管');
+                    detailParts.push(data.status);
                     detail.textContent = detailParts.join(' · ');
 
                     actions.innerHTML =
@@ -806,8 +801,8 @@
                 } else {
                     icon.className = 'status-icon offline';
                     icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#ff4d4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
-                    val.textContent = '未登录';
-                    detail.textContent = '请先扫码登录后使用 API';
+                    val.textContent = '未登录微信读书';
+                    detail.textContent = '扫码登录微信读书后即可使用（不需要公众号）';
 
                     actions.innerHTML =
                         '<button class="btn-sm" onclick="checkStatus()">刷新</button>' +
@@ -998,7 +993,7 @@
         }
 
         async function clearWereadCookie() {
-            if (!confirm('确定清除已保存的微信读书 Cookie？清除后后台失效时将无法自动兜底。')) return;
+            if (!confirm('确定清除微信读书登录态？清除后将无法采集任何文章。')) return;
             try {
                 var res = await fetch('/api/weread/cookie', { method: 'DELETE' });
                 var data = await res.json();

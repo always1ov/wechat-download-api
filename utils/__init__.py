@@ -8,7 +8,6 @@
 工具模块初始化
 """
 
-from .auth_manager import auth_manager
 from .helpers import (
     parse_article_url,
     extract_article_info,
@@ -19,7 +18,6 @@ from .helpers import (
 )
 
 __all__ = [
-    'auth_manager',
     'parse_article_url',
     'extract_article_info',
     'is_article_deleted',
