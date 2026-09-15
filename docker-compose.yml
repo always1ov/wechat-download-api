@@ -1,6 +1,6 @@
 # WeChat Download API —— 单文件部署，只要这一个 docker-compose.yml
 #
-#   docker compose up -d --build
+#   docker compose up -d
 #   打开 http://localhost:5000/admin.html，按卡片三步走：
 #     ① 扫码登录微信读书（/login.html）
 #     ② 从书架导入公众号（/rss.html「添加订阅 → 从微信读书书架导入」）
@@ -10,18 +10,24 @@
 # 要改配置，直接改下面 environment 里的值就行，不需要额外的 .env。
 # （如果同目录下确实放了 .env，compose 会自动用它覆盖下面的默认值，两种都支持。）
 #
+# 更新到最新版：docker compose pull && docker compose up -d
+# 想确认到底更没更新：curl http://localhost:5000/api/health，看 build.short_sha
+# （管理页最底下也会显示，形如 claude/kind-bell-ian46x @ 1a2b3c4）
+#
 # 登录凭证和文章库都存在 ./data 里，别删。
 # 群晖 / QNAP 等 NAS 若遇权限问题：chmod -R 777 ./data
 
 services:
   wechat-api:
-    # 本地构建：本仓库有上游镜像里没有的改动（微信读书通道等），
-    # 直接拉 tmwgsicp/wechat-download-api 是拿不到的。
-    build: .
-    image: wechat-download-api:local
+    # 直接用 CI 构建好的镜像，粘贴这个文件就能跑，不用克隆仓库。
     #
-    # 想用 CI 构建好的镜像，把上面两行换成下面这行：
-    # image: ghcr.io/always1ov/wechat-download-api:latest
+    # 注意别换成 tmwgsicp/wechat-download-api —— 那是上游镜像，
+    # 没有本仓库的改动（整条微信读书通道都在这边），拉了等于没更新。
+    image: ghcr.io/always1ov/wechat-download-api:latest
+    pull_policy: always          # compose up 时总去看有没有新镜像
+    #
+    # 想从源码本地构建，把上面两行换成：
+    # build: .
     #
     container_name: wechat-download-api
     restart: unless-stopped

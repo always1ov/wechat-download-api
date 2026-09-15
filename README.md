@@ -101,9 +101,16 @@ docker run -d \
 > 习惯用 `.env` 的话也支持 —— 同目录放一个，会自动覆盖 compose 里的默认值
 > （`cp env.example .env` 可作为起点，里面有全部变量的详细说明）。
 
-> compose 默认**本地构建**：本仓库有上游镜像里没有的改动（微信读书通道等），
-> 直接拉 `tmwgsicp/wechat-download-api` 拿不到。CI 跑通后可改用
-> `ghcr.io/always1ov/wechat-download-api:latest`，compose 里有注释好的那一行。
+> compose 默认用 **CI 构建好的镜像** `ghcr.io/always1ov/wechat-download-api:latest`，
+> 粘贴即可部署，不用克隆仓库。**别换成 `tmwgsicp/wechat-download-api`** —— 那是上游镜像，
+> 没有本仓库的改动（整条微信读书通道都在这边），拉了等于没更新。
+> 想从源码构建，把 `image:` 那两行换成 `build: .`。
+
+**更新到最新版**：`docker compose pull && docker compose up -d`
+
+**确认到底更没更新**：`curl http://localhost:5000/api/health`，看 `build.short_sha`；
+管理页最底下也会显示，形如 `claude/kind-bell-ian46x @ 1a2b3c4`。
+拉完发现页面没变、`short_sha` 也没变，就是没拉到新镜像。
 
 服务启动后访问 `http://localhost:5000/admin.html`，按卡片上的三步走：
 

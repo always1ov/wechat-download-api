@@ -40,12 +40,22 @@ COPY . .
 # Create data directory
 RUN mkdir -p /app/data
 
+# 构建标记：CI 把 commit sha / 分支 / 时间烤进镜像，
+# /api/health 和管理页底部都会显示，用来确认「跑的到底是哪一版」。
+# 本地 docker build 不传也能用，显示成 dev/unknown。
+ARG BUILD_SHA=unknown
+ARG BUILD_REF=dev
+ARG BUILD_TIME=""
+
 # Environment variables with sensible defaults
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HOST=0.0.0.0 \
     PORT=5000 \
-    DEBUG=false
+    DEBUG=false \
+    BUILD_SHA=$BUILD_SHA \
+    BUILD_REF=$BUILD_REF \
+    BUILD_TIME=$BUILD_TIME
 
 EXPOSE 5000
 

@@ -619,7 +619,7 @@
 
         <!-- Footer -->
         <div class="footer">
-            <span>WeChat Download API v1.0.0</span>
+            <span>WeChat Download API v1.0.0 · <span id="buildTag">…</span></span>
             <div class="footer-links">
                 <a href="/api/openapi.json" target="_blank">OpenAPI</a>
                 <a href="https://github.com/tmwgsicp/wechat-download-api" target="_blank">GitHub</a>
@@ -780,7 +780,22 @@
             if (e.key === 'Enter') testArticle();
         });
 
-        window.addEventListener('load', checkStatus);
+        // 底部显示镜像构建标记：拉完新镜像后一眼能确认版本变了没
+        async function showBuild() {
+            var el = document.getElementById('buildTag');
+            try {
+                var d = await (await fetch('/api/health')).json();
+                var b = d.build || {};
+                el.textContent = b.short_sha && b.short_sha !== 'unknown'
+                    ? (b.ref || '') + ' @ ' + b.short_sha
+                    : '本地构建';
+                el.title = (b.sha || '') + (b.time ? ' · ' + b.time : '');
+            } catch (e) {
+                el.textContent = '版本未知';
+            }
+        }
+
+        window.addEventListener('load', function () { showBuild(); checkStatus(); });
     </script>
 </body>
 </html>
