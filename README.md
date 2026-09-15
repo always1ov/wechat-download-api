@@ -81,11 +81,9 @@
 **最快速的部署方式**，无需配置 Python 环境，一键启动：
 
 ```bash
-# 方式一：docker compose（推荐）
+# 方式一：docker compose（推荐）—— 只要 docker-compose.yml 一个文件
 git clone https://github.com/always1ov/wechat-download-api.git
 cd wechat-download-api
-cp env.example .env
-# 编辑 .env，把 SITE_URL 改成实际访问地址
 docker compose up -d --build
 
 # 方式二：直接 docker run（先本地构建出镜像）
@@ -93,11 +91,16 @@ docker build -t wechat-download-api:local .
 docker run -d \
   -p 5000:5000 \
   -v $(pwd)/data:/app/data \
-  --env-file .env \
+  -e SITE_URL=http://你的IP:5000 \
   -e TZ=Asia/Shanghai \
   --name wechat-api \
   wechat-download-api:local
 ```
+
+> 配置**不需要**额外的 `.env`：所有选项都写在 `docker-compose.yml` 的 `environment:` 里，
+> 改那里即可。记得把 `SITE_URL` 改成实际访问地址，否则 RSS 图片显示不出来。
+> 习惯用 `.env` 的话也支持 —— 同目录放一个，会自动覆盖 compose 里的默认值
+> （`cp env.example .env` 可作为起点，里面有全部变量的详细说明）。
 
 > compose 默认**本地构建**：本仓库有上游镜像里没有的改动（微信读书通道等），
 > 直接拉 `tmwgsicp/wechat-download-api` 拿不到。CI 跑通后可改用
