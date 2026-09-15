@@ -72,7 +72,8 @@
 ## Docker 部署 🐳
 
 > **镜像从哪来**：本仓库的 GitHub Actions 会把镜像推到 GHCR（`ghcr.io/always1ov/wechat-download-api`），用内置 `GITHUB_TOKEN`，**不需要配置任何 secret**。
-> 打 `v*` tag 出正式版（amd64 + arm64），推 `claude/**` 分支出开发版（amd64）。
+> 打 `v*` tag 出正式版（amd64 + arm64），推 `main` 出 `:latest`，推 `claude/**` 分支出开发版（amd64）。
+> GHCR 的包默认是私有的，想让别人免登录拉取，需要到仓库 Packages 页把它改成 Public。
 > ⚠️ **fork 仓库默认关闭 Actions**，需先到 `Settings → Actions → General` 打开，工作流才会跑。
 > 也可以本地构建：`docker build -t wechat-download-api .`
 

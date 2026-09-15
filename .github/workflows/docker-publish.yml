@@ -5,6 +5,7 @@
 #
 # 触发方式：
 #   - 打 v* tag        → 正式版，构建 linux/amd64 + linux/arm64
+#   - 推 main          → 出 :latest 和 :main，只构建 amd64
 #   - 推 claude/** 分支 → 按分支名出一个镜像，只构建 amd64（arm64 靠 QEMU 模拟，很慢）
 #   - 手动 workflow_dispatch
 
@@ -15,6 +16,7 @@ on:
     tags:
       - 'v*'
     branches:
+      - main
       - 'claude/**'
   workflow_dispatch:
     inputs:
