@@ -113,11 +113,8 @@ class RSSPoller:
                 logger.error("RSS poll cycle error: %s", e, exc_info=True)
             await asyncio.sleep(POLL_INTERVAL)
 
-    async def _poll_all(self):
-        fakeids = rss_store.get_all_fakeids()
-        if not fakeids:
-            return
-
+    def _resolve_channels(self):
+        """决定这一轮走哪条通道。返回 (creds, 用后台, 用微信读书)。"""
         creds = auth_manager.get_credentials()
         mp_ready = bool(creds and creds.get("token") and creds.get("cookie"))
         weread_ready = weread_client.is_enabled()
@@ -128,6 +125,78 @@ class RSSPoller:
             mp_ready = False
         elif source == "mp":
             weread_ready = False
+        return creds, mp_ready, weread_ready
+
+    async def _poll_one(self, fakeid: str, creds: Dict, mp_ready: bool,
+                        weread_ready: bool, nickname: str = "") -> int:
+        """采集单个公众号并入库，返回新增篇数。异常原样上抛，由调用方处理。"""
+        articles = await self._fetch_article_list(
+            fakeid, creds,
+            use_mp=mp_ready,
+            use_weread=weread_ready,
+            nickname=nickname,
+        )
+        if articles and FETCH_FULL_CONTENT:
+            # 获取完整文章内容
+            articles = await self._enrich_articles_content(fakeid, articles)
+
+        new_count = 0
+        if articles:
+            # 轮询器拉取的文章标记为 'poll'
+            new_count = rss_store.save_articles(fakeid, articles, source='poll')
+            if new_count > 0:
+                logger.info("RSS: %d new articles for %s", new_count, fakeid[:8])
+        rss_store.update_last_poll(fakeid)
+        return new_count
+
+    def _blacklist_invalid(self, fakeid: str):
+        # [2026-05-18] 同步 SaaS 修复：fakeid 在微信侧已失效，自动加入黑名单
+        # 取该 fakeid 的 nickname（如果数据库里有）便于后续运维查看
+        sub = rss_store.get_subscription(fakeid)
+        nickname = sub.get("nickname", "") if sub else ""
+        logger.warning("Fakeid %s (%s) is invalid on WeChat, adding to blacklist",
+                       fakeid[:8], nickname)
+        try:
+            rss_store.add_to_blacklist(
+                fakeid, nickname=nickname, reason="invalid_fakeid",
+                note="[2026-05-18] 微信侧返回 invalid args，fakeid 已失效（注销/改名/重新注册）",
+            )
+        except Exception as bl_err:
+            logger.warning("Failed to blacklist invalid fakeid %s: %s", fakeid[:8], bl_err)
+
+    async def fetch_now(self, fakeid: str) -> int:
+        """立刻采集某一个公众号，返回新增篇数。
+
+        订阅接口用它做「订阅后马上抓一次」—— 否则用户要等下一轮轮询
+        （默认 1 小时）才看得到文章，界面上像是没生效。
+        """
+        creds, mp_ready, weread_ready = self._resolve_channels()
+        if not mp_ready and not weread_ready:
+            logger.warning("立即采集跳过 %s: 两条通道都不可用", fakeid[:8])
+            return 0
+        if rss_store.is_blacklisted(fakeid):
+            logger.info("立即采集跳过 %s: 在黑名单里", fakeid[:8])
+            return 0
+
+        sub = rss_store.get_subscription(fakeid)
+        nickname = (sub or {}).get("nickname", "")
+        try:
+            count = await self._poll_one(fakeid, creds, mp_ready, weread_ready, nickname)
+            logger.info("立即采集完成 %s: 新增 %d 篇", nickname or fakeid[:8], count)
+            return count
+        except WechatInvalidFakeidError:
+            self._blacklist_invalid(fakeid)
+            return 0
+        except Exception as e:
+            logger.error("立即采集失败 %s: %s", fakeid[:8], e)
+            return 0
+
+    async def _poll_all(self):
+        fakeids = rss_store.get_all_fakeids()
+        if not fakeids:
+            return
+
+        creds, mp_ready, weread_ready = self._resolve_channels()
 
         if not mp_ready and not weread_ready:
             logger.warning(
@@ -143,48 +212,23 @@ class RSSPoller:
 
         # 获取活跃黑名单
         blacklisted = set(rss_store.get_active_blacklist_fakeids())
-        
+
         # 过滤掉黑名单中的公众号
         active_fakeids = [f for f in fakeids if f not in blacklisted]
         skipped = len(fakeids) - len(active_fakeids)
-        
+
         if skipped > 0:
-            logger.info("RSS poll: %d subscriptions (%d blacklisted, skipped)", 
-                       len(fakeids), skipped)
+            logger.info("RSS poll: %d subscriptions (%d blacklisted, skipped)",
+                        len(fakeids), skipped)
         else:
             logger.info("RSS poll: checking %d subscriptions", len(fakeids))
 
         for fakeid in active_fakeids:
             try:
-                articles = await self._fetch_article_list(
-                    fakeid, creds,
-                    use_mp=mp_ready,
-                    use_weread=weread_ready,
-                    nickname=nicknames.get(fakeid, ""),
-                )
-                if articles and FETCH_FULL_CONTENT:
-                    # 获取完整文章内容
-                    articles = await self._enrich_articles_content(fakeid, articles)
-
-                if articles:
-                    # 轮询器拉取的文章标记为 'poll'
-                    new_count = rss_store.save_articles(fakeid, articles, source='poll')
-                    if new_count > 0:
-                        logger.info("RSS: %d new articles for %s", new_count, fakeid[:8])
-                rss_store.update_last_poll(fakeid)
-            except WechatInvalidFakeidError as e:
-                # [2026-05-18] 同步 SaaS 修复：fakeid 在微信侧已失效，自动加入黑名单
-                # 取该 fakeid 的 nickname（如果数据库里有）便于后续运维查看
-                sub = rss_store.get_subscription(fakeid)
-                nickname = sub.get("nickname", "") if sub else ""
-                logger.warning("Fakeid %s (%s) is invalid on WeChat, adding to blacklist", fakeid[:8], nickname)
-                try:
-                    rss_store.add_to_blacklist(
-                        fakeid, nickname=nickname, reason="invalid_fakeid",
-                        note="[2026-05-18] 微信侧返回 invalid args，fakeid 已失效（注销/改名/重新注册）",
-                    )
-                except Exception as bl_err:
-                    logger.warning("Failed to blacklist invalid fakeid %s: %s", fakeid[:8], bl_err)
+                await self._poll_one(fakeid, creds, mp_ready, weread_ready,
+                                     nicknames.get(fakeid, ""))
+            except WechatInvalidFakeidError:
+                self._blacklist_invalid(fakeid)
             except Exception as e:
                 logger.error("RSS poll error for %s: %s", fakeid[:8], e)
             await asyncio.sleep(3)

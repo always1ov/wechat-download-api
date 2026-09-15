@@ -121,7 +121,15 @@ class StoreAdapter:
         except Exception:
             pass
         rss_store.add_subscription(fakeid, nickname=nickname)
-        return {"success": True, "message": f"已订阅 {nickname or fakeid}"}
+        # 立刻抓一次，别让调用方等下一轮轮询（默认 1 小时）才看到文章
+        new_count = 0
+        try:
+            from utils.rss_poller import rss_poller
+            new_count = await rss_poller.fetch_now(fakeid)
+        except Exception as e:
+            logger.warning("订阅后立即采集失败 %s: %s", fakeid[:8], e)
+        return {"success": True,
+                "message": f"已订阅 {nickname or fakeid}，抓到 {new_count} 篇新文章"}
 
     async def unsubscribe_account(self, fakeid: str) -> dict:
         ok = rss_store.remove_subscription(fakeid)

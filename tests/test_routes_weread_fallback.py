@@ -240,3 +240,39 @@ def test_weread_renew_reports_missing_wr_rt(client, monkeypatch):
     body = client.post("/api/weread/renew").json()
     assert body["success"] is False
     assert "wr_rt" in body["error"]
+
+
+def test_weread_diagnose_reports_each_step(client, monkeypatch):
+    """诊断接口要把每一步单独试完，不能前面失败就整体中断。"""
+    import httpx
+
+    def handler(request):
+        p = request.url.path
+        if p == "/web/shelf/sync":
+            return httpx.Response(200, json={"errCode": -2012, "errMsg": "login timeout"})
+        if p == "/api/mp/cover":
+            return httpx.Response(200, json={"reviewId": f"{BOOK_ID}_tok", "title": "最新"})
+        return httpx.Response(401, text="unauthorized")
+
+    monkeypatch.setattr(
+        WereadClient, "_new_client",
+        lambda self: httpx.AsyncClient(transport=httpx.MockTransport(handler),
+                                       follow_redirects=True),
+    )
+
+    body = client.get("/api/weread/diagnose", params={"fakeid": FAKEID}).json()
+    steps = {s["step"]: s for s in body["data"]["steps"]}
+
+    # 登录态失败了，但后面的步骤仍然要各自跑完
+    assert steps["登录态有效 (/web/shelf/sync)"]["ok"] is False
+    assert steps["fakeid → bookId"]["ok"] is True
+    assert steps["fakeid → bookId"]["detail"] == BOOK_ID
+    assert steps["最新一篇兜底 (/api/mp/cover)"]["ok"] is True
+    assert body["data"]["failed"], "应当列出失败环节"
+
+
+def test_weread_diagnose_without_cookie(client, monkeypatch):
+    monkeypatch.delenv("WEREAD_COOKIE", raising=False)
+    body = client.get("/api/weread/diagnose").json()
+    assert body["success"] is False
+    assert body["data"]["steps"][0]["ok"] is False

@@ -228,6 +228,160 @@ async def add_to_shelf(req: ShelfRequest):
     return WereadResponse(success=ok, data=data, error=None if ok else detail)
 
 
+@router.get("/weread/diagnose", response_model=WereadResponse, summary="诊断微信读书通道")
+async def weread_diagnose(
+    fakeid: str = Query("", description="要测的公众号 FakeID 或 MP_WXS_* bookId（可选，"
+                                        "不填只测登录态和搜索）"),
+):
+    """
+    把微信读书这条链路逐步跑一遍，指出到底卡在哪一步。
+
+    「拉不到文章」可能断在任意环节：Cookie 缺字段、登录态过期、公众号不在书架、
+    列表接口被风控、正文接口挂了……逐个报错才好定位，所以每一步都单独试、
+    单独记结果，不会因为前面失败就中断后面的检查。
+
+    把返回的 `steps` 整段贴出来即可定位问题。
+    """
+    steps = []
+
+    def rec(name, ok, detail="", hint=""):
+        steps.append({"step": name, "ok": bool(ok), "detail": str(detail)[:400],
+                      "hint": hint})
+
+    def err_detail(e):
+        if isinstance(e, WereadError):
+            return f"code={e.code} msg={e.message}"
+        return f"{type(e).__name__}: {e}"
+
+    # ── 1. Cookie 本身 ──
+    cookie = weread_auth.get_cookie()
+    pairs = weread_client.parse_cookie(cookie)
+    rec("Cookie 已配置", bool(cookie),
+        f"来源={'环境变量 WEREAD_COOKIE' if weread_auth.is_env_managed() else 'data/.weread.json'}"
+        if cookie else "未配置",
+        "" if cookie else "到管理页点「扫码登录微信读书」")
+    rec("含 wr_skey", "wr_skey" in pairs, "", "缺了就是没登录成功，重新扫码")
+    rec("含 wr_rt", "wr_rt" in pairs, "",
+        "缺了无法自动续期，wr_skey 一过期就得重新扫码")
+    rec("含 wr_vid", "wr_vid" in pairs, "", "缺了加入书架会失败")
+
+    if not cookie:
+        return WereadResponse(success=False, data={"steps": steps},
+                              error=weread_client.COOKIE_MISSING_MSG)
+
+    # ── 2. 登录态（先不自动续期，看真实状态）──
+    login_ok = False
+    try:
+        async with WereadClient(allow_renew=False) as probe:
+            login_ok, message = await probe.verify()
+        rec("登录态有效 (/web/shelf/sync)", login_ok, message,
+            "" if login_ok else "下一步的续期若成功即可自愈")
+    except Exception as e:
+        rec("登录态有效 (/web/shelf/sync)", False, err_detail(e))
+
+    # ── 3. 续期（登录态不行时这是自愈手段）──
+    if not login_ok:
+        try:
+            async with WereadClient(allow_renew=False) as probe:
+                await probe.renew_cookie()
+                login_ok, message = await probe.verify()
+            rec("续期后登录态 (/web/login/renewal)", login_ok, message,
+                "" if login_ok else "wr_rt 也失效了，必须重新扫码")
+        except Exception as e:
+            rec("续期 (/web/login/renewal)", False, err_detail(e),
+                "wr_rt 失效或接口有变，需要重新扫码")
+
+    async with WereadClient() as client:
+        # ── 4. App 域（i.weread.qq.com）──
+        try:
+            found = await client.search_mp_accounts("人民日报", count=5)
+            rec("App 域可用 (/store/search)", True, f"搜到 {len(found)} 个公众号",
+                "" if found else "接口通但没结果，可能是关键词或响应结构变了")
+        except Exception as e:
+            rec("App 域可用 (/store/search)", False, err_detail(e),
+                "App 域对登录态更严；不通不影响网页域采集，只是搜公众号得靠后台")
+
+        if not fakeid:
+            return WereadResponse(success=True, data={
+                "steps": steps,
+                "note": "带上 ?fakeid=xxx 可继续测该公众号的书架/列表/正文",
+            })
+
+        # ── 5. bookId 换算 ──
+        try:
+            book_id = weread_client.fakeid_to_book_id(fakeid)
+            rec("fakeid → bookId", True, book_id)
+        except WereadError as e:
+            rec("fakeid → bookId", False, err_detail(e),
+                "fakeid 格式不对，应是后台搜索返回的 base64 串")
+            return WereadResponse(success=False, data={"steps": steps},
+                                  error="fakeid 无法换算成 bookId")
+
+        # ── 6. 书架（微信读书只对书架上的号返回文章）──
+        try:
+            on_shelf = await client.get_shelf_book_ids([book_id])
+            rec("查询书架 (/web/shelf/bookIds)", True,
+                f"在架={book_id in (on_shelf or [])} 原始={on_shelf}")
+        except Exception as e:
+            rec("查询书架 (/web/shelf/bookIds)", False, err_detail(e))
+
+        try:
+            await client.add_to_shelf(book_id)
+            rec("加入书架 (/mp/shelf/addToShelf)", True, "已加入或本来就在")
+        except Exception as e:
+            rec("加入书架 (/mp/shelf/addToShelf)", False, err_detail(e),
+                "不在书架微信读书就不返回文章，这一步失败基本注定拉不到")
+
+        # ── 7. 三条取列表的路，逐个试 ──
+        review_id = ""
+        try:
+            payload = await client.get_articles_page(book_id, offset=0)
+            articles, groups = weread_client.parse_mp_articles(payload, book_id)
+            review_id = articles[0]["review_id"] if articles else ""
+            rec("网页域列表 (/web/mp/articles)", True,
+                f"{len(articles)} 篇 / {groups} 组",
+                "" if articles else "接口通但 0 篇：该号可能没在微信读书发过文章")
+        except Exception as e:
+            rec("网页域列表 (/web/mp/articles)", False, err_detail(e))
+
+        try:
+            payload = await client.get_app_articles_page(book_id, offset=0)
+            app_articles, _ = weread_client.parse_app_articles(payload, book_id)
+            review_id = review_id or (app_articles[0]["review_id"] if app_articles else "")
+            rec("App 域列表 (/book/articles)", True, f"{len(app_articles)} 篇")
+        except Exception as e:
+            rec("App 域列表 (/book/articles)", False, err_detail(e))
+
+        try:
+            payload = await client.get_cover(book_id)
+            latest = weread_client.parse_mp_cover(payload, book_id)
+            review_id = review_id or (latest or {}).get("review_id", "")
+            rec("最新一篇兜底 (/api/mp/cover)", True,
+                f"《{(latest or {}).get('title', '')}》")
+        except Exception as e:
+            rec("最新一篇兜底 (/api/mp/cover)", False, err_detail(e))
+
+        # ── 8. 正文 ──
+        if review_id:
+            try:
+                result = await client.fetch_article_content(review_id)
+                rec("取正文 (/web/mp/content)", True,
+                    f"{len(result.get('content', ''))} 字符, "
+                    f"{len(result.get('images', []))} 张图")
+            except Exception as e:
+                rec("取正文 (/web/mp/content)", False, err_detail(e))
+        else:
+            rec("取正文 (/web/mp/content)", False,
+                "前面没拿到任何 reviewId，跳过", "先解决上面的列表问题")
+
+    failed = [s["step"] for s in steps if not s["ok"]]
+    return WereadResponse(
+        success=not failed,
+        data={"steps": steps, "failed": failed, "book_id": book_id},
+        error=None if not failed else f"以下环节失败: {', '.join(failed)}",
+    )
+
+
 @router.get("/weread/search", response_model=WereadResponse, summary="通过微信读书搜索公众号")
 async def weread_search(
     query: str = Query(..., description="公众号名称或关键词"),

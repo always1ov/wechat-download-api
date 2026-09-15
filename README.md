@@ -242,9 +242,29 @@ App 域按「能用就用」处理：不通（401/风控）就记一笔，10 分
 | `POST` | `/api/weread/verify` | 校验当前 Cookie 是否还有效 |
 | `POST` | `/api/weread/renew` | 手动用 `wr_rt` 续期 `wr_skey` |
 | `POST` | `/api/weread/shelf` | 手动把公众号加入微信读书书架 |
+| `GET` | `/api/weread/diagnose?fakeid=xxx` | **排障用**：把整条链路逐步跑一遍，指出卡在哪一步 |
 | `GET` | `/api/weread/search?query=xxx` | 直连微信读书搜公众号（App 域，不经过后台） |
 | `GET` | `/api/weread/articles?fakeid=xxx` | 直连微信读书取文章列表（完全不经过后台） |
 | `GET` | `/api/weread/content?review_id=xxx` | 直连微信读书取正文，也可传 `url` + `fakeid` |
+
+### 拉不到文章怎么办
+
+先跑诊断，它会把 Cookie、登录态、续期、书架、三条取列表的路、正文逐个试一遍，
+告诉你到底断在哪：
+
+```bash
+curl "http://localhost:5000/api/weread/diagnose?fakeid=你的公众号fakeid" | python3 -m json.tool
+```
+
+几个常见原因：
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| 刚订阅就去看，是空的 | 旧版本只写库、等下一轮轮询（默认 1 小时） | 已修：订阅会立即在后台抓一次；也可手动 `POST /api/rss/poll` |
+| 诊断显示登录态 `-2012` | `wr_skey` 过期 | 有 `wr_rt` 会自动续期；诊断里续期也失败就重新扫码 |
+| 「加入书架」失败 | 微信读书只对**书架上**的公众号返回文章 | 手动在微信读书 App 里关注该号，或检查 Cookie 是否含 `wr_vid` |
+| 只拿得到一篇 | 列表接口被风控，退到了 `/api/mp/cover` | 该接口一次只返回最新一篇，属预期降级 |
+| App 域步骤全红 | i 域对登录态更严 | 不影响网页域采集，只是搜公众号得靠后台 |
 
 ### 已知限制
 

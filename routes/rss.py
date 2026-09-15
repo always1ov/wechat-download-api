@@ -19,7 +19,7 @@ from html import escape as html_escape
 from typing import Optional
 import xml.etree.ElementTree as ET
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -112,11 +112,13 @@ class PollerStatusResponse(BaseModel):
 # ── 订阅管理 ─────────────────────────────────────────────
 
 @router.post("/rss/subscribe", response_model=SubscribeResponse, summary="添加 RSS 订阅")
-async def subscribe(req: SubscribeRequest, request: Request):
+async def subscribe(req: SubscribeRequest, request: Request,
+                    background: BackgroundTasks):
     """
-    添加一个公众号到 RSS 订阅列表。
+    添加一个公众号到 RSS 订阅列表，并**立即在后台抓一次**。
 
-    添加后，后台轮询器会定时拉取该公众号的最新文章。
+    订阅成功会马上触发一次采集（不阻塞本请求）。以前只写库、等下一轮轮询，
+    默认要等 1 小时才看得到文章，界面上像是没生效。
 
     **请求体参数：**
     - **fakeid** (必填): 公众号 FakeID，通过搜索接口获取
@@ -130,10 +132,12 @@ async def subscribe(req: SubscribeRequest, request: Request):
         alias=req.alias,
         head_img=req.head_img,
     )
+    # 新订阅和重复订阅都抓一次：重复订阅往往就是用户没看到文章又点了一遍
+    background.add_task(rss_poller.fetch_now, req.fakeid)
     if added:
         logger.info("RSS subscription added: %s (%s)", req.nickname, req.fakeid[:8])
-        return SubscribeResponse(success=True, message="订阅成功")
-    return SubscribeResponse(success=True, message="已订阅，无需重复添加")
+        return SubscribeResponse(success=True, message="订阅成功，正在后台拉取文章")
+    return SubscribeResponse(success=True, message="已订阅，正在后台重新拉取文章")
 
 
 class BatchSubscribeRequest(BaseModel):
@@ -141,7 +145,8 @@ class BatchSubscribeRequest(BaseModel):
 
 
 @router.post("/rss/batch-subscribe", summary="批量订阅（多个公众号名称）")
-async def batch_subscribe(req: BatchSubscribeRequest, request: Request):
+async def batch_subscribe(req: BatchSubscribeRequest, request: Request,
+                          background: BackgroundTasks):
     """
     粘一批公众号名称（每行一个）→ 逐个搜索并订阅。
 
@@ -175,7 +180,8 @@ async def batch_subscribe(req: BatchSubscribeRequest, request: Request):
             else:
                 rss_store.add_subscription(c["fakeid"], c["nickname"], c["alias"], c["round_head_img"])
                 subscribed_fakeids.add(c["fakeid"])
-                subscribed.append({"input": line, "nickname": c["nickname"] or c["fakeid"]})
+                subscribed.append({"input": line, "fakeid": c["fakeid"],
+                                   "nickname": c["nickname"] or c["fakeid"]})
         else:
             needs_confirm.append({"input": line, "matches": [
                 {"fakeid": c["fakeid"], "nickname": c["nickname"], "alias": c["alias"],
@@ -183,6 +189,12 @@ async def batch_subscribe(req: BatchSubscribeRequest, request: Request):
                 for c in cands]})
         if i < len(lines) - 1:
             await asyncio.sleep(1.0)  # 温和：微信搜索接口有限频，别冲爆登录态
+
+    # 批量订阅的也各自抓一次，理由同 /rss/subscribe
+    for item in subscribed:
+        fid = item.get("fakeid", "")
+        if fid:
+            background.add_task(rss_poller.fetch_now, fid)
 
     return {
         "success": True,
