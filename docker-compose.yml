@@ -52,7 +52,10 @@ services:
       # 登录态守护：后台定期探活 + 主动续期，别等采集撞上失效才补救。
       # 续不回来（wr_rt 也死了）会发 webhook 报警，管理页挂红条提示重新扫码。
       WEREAD_KEEPALIVE: ${WEREAD_KEEPALIVE:-true}
-      WEREAD_KEEPALIVE_INTERVAL: ${WEREAD_KEEPALIVE_INTERVAL:-21600}   # 检查间隔（秒），默认 6 小时
+      # 检查间隔（秒），默认 6 小时，实际等待带 ±15% 抖动（固定节奏容易被风控当成机器）。
+      # 低于 1800 会被抬到 1800：wr_skey 本来就按需续期，查得勤不会更早发现 wr_rt 失效。
+      # 最近 1 小时内有真实采集请求成功过的话，这一轮会直接跳过，不额外发请求。
+      WEREAD_KEEPALIVE_INTERVAL: ${WEREAD_KEEPALIVE_INTERVAL:-21600}
       WEREAD_APP_API: ${WEREAD_APP_API:-true}          # App 域接口（多一个「搜公众号」能力）
       WEREAD_AUTO_ADD_SHELF: ${WEREAD_AUTO_ADD_SHELF:-true}
       WEREAD_CONTENT_INTERVAL: ${WEREAD_CONTENT_INTERVAL:-2}

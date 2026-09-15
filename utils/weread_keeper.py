@@ -22,6 +22,31 @@
   `needs_relogin`，管理页会挂出横幅提示去重新扫码；
 - 恢复正常时再发一条，免得用户以为还挂着。
 
+
+频率是怎么定的（关键，别随手改小）
+----------------------------------
+
+公开资料里 `wr_skey` 的有效期约 **5400 秒（1.5 小时）**，过期后接口判 401 /
+`-2012`。照着这个数字，「让 skey 永不过期」需要每小时续一次，一天 24 次 ——
+这个方向是错的，理由有三：
+
+1. **没必要。** 续期本来就是按需触发的：任何请求撞上 -2012 都会当场续期并
+   重试，用户无感。守护不是为了「让 skey 永远新鲜」，而是为了**尽早发现
+   `wr_rt` 也死了**这种人工才能解决的情况。这种事一个月未必遇到一次，
+   6 小时内发现完全够。
+2. **反而更危险。** 微信读书的风控除了看请求频率，还看**请求规律性** ——
+   严格等间隔的请求本身就是机器特征。所以这里不但不压缩间隔，还给它加了
+   ±15% 的抖动。
+3. **重复。** 轮询器默认一小时跑一轮，本来就在持续证明登录态是活的。
+   守护再定时打一次接口纯属重复，所以下面有 `_recently_proven_alive()`：
+   最近有真实请求成功过就直接跳过这一轮，正常运行时守护几乎不产生额外流量。
+
+作为参照，同类项目（如 weread2notion-pro）的同步频率是 2~3 小时一次且长期
+在跑。本项目守护一次只打一个 `/web/shelf/sync`，比那轻得多。
+
+真正需要担心的封号风险不在这儿，而在**采集频率**（`RSS_POLL_INTERVAL`、
+`WEREAD_CONTENT_INTERVAL`）以及**多端同时登录同一账号**（会互相踢掉登录态）。
+
 只做「维持」，不碰采集：守护任务不会去拉文章，单次开销就是一个
 /web/shelf/sync 加上可能的一次续期。
 """
@@ -29,6 +54,7 @@
 import asyncio
 import logging
 import os
+import random
 import time
 from typing import Dict, Optional
 
@@ -37,13 +63,21 @@ from utils.webhook import webhook
 
 logger = logging.getLogger(__name__)
 
-# 6 小时查一次：wr_skey 的寿命远短于此，但被动续期本来就兜得住，
-# 守护的意义是「别让失败发生在用户面前」，不是把间隔压到极限。
+# 6 小时查一次。wr_skey 只活 1.5 小时，但按需续期本来就兜得住；
+# 守护要抓的是「wr_rt 也死了」这种人工才能解决的事，6 小时内发现足够。
 DEFAULT_INTERVAL = 6 * 3600
+# 间隔抖动 ±15%：严格等间隔的请求本身就是机器特征，别给风控送把柄
+INTERVAL_JITTER = 0.15
+# 最近这么久内有真实请求成功过，就跳过这一轮探活 ——
+# 采集已经在证明登录态是活的，不必再额外打一次接口。
+# 取 1 小时是因为轮询器默认就是一小时一轮，正好错开。
+SKIP_IF_ALIVE_WITHIN = 3600
 # 启动后先等一会儿再查：让应用先把端口起好，别和初始化抢资源
 STARTUP_DELAY = 30.0
 # 连续失败几次之后才认定「真的需要重新扫码」，避免一次网络抖动就报警
 FAILURES_BEFORE_ALARM = 2
+# 间隔下限。低于这个值对「发现 wr_rt 失效」没有任何帮助，只是徒增请求。
+MIN_INTERVAL = 1800
 
 
 def keepalive_enabled() -> bool:
@@ -55,12 +89,28 @@ def keepalive_enabled() -> bool:
 
 
 def keepalive_interval() -> int:
-    """检查间隔（秒）。太小没意义还费配额，这里兜底不低于 5 分钟。"""
+    """检查间隔（秒）。
+
+    兜底不低于 MIN_INTERVAL（30 分钟）：守护要发现的是 `wr_rt` 失效，
+    查得再勤也不会更早发现，只会平白多打接口、还把请求节奏做得更像机器。
+    """
     try:
         value = int(os.getenv("WEREAD_KEEPALIVE_INTERVAL", str(DEFAULT_INTERVAL)))
     except ValueError:
         return DEFAULT_INTERVAL
-    return max(300, value)
+    return max(MIN_INTERVAL, value)
+
+
+def _next_delay() -> float:
+    """下一轮的等待时间，带 ±15% 抖动，避免固定节奏被当成机器。"""
+    base = keepalive_interval()
+    return base * random.uniform(1 - INTERVAL_JITTER, 1 + INTERVAL_JITTER)
+
+
+def _recently_proven_alive() -> bool:
+    """最近有真实请求成功过吗？有的话这一轮就不用自己去探活了。"""
+    last = weread_client.last_success_at()
+    return bool(last) and (time.time() - last) < SKIP_IF_ALIVE_WITHIN
 
 
 class WereadKeeper:
@@ -76,6 +126,7 @@ class WereadKeeper:
         self._failures = 0
         self._message = ""
         self._alarmed = False              # 已经报过警，别每轮都刷
+        self._skipped = 0                  # 因为「真实流量刚验证过」而跳过的轮数
 
     # --- 生命周期 ---
 
@@ -120,6 +171,9 @@ class WereadKeeper:
             "last_renew_ok": self._last_renew_ok,
             "next_check_at": next_at,
             "failures": self._failures,
+            "skipped": self._skipped,
+            "skip_if_alive_within": SKIP_IF_ALIVE_WITHIN,
+            "last_traffic_ok_at": int(weread_client.last_success_at()),
             "needs_relogin": self.needs_relogin,
             "message": self._message,
         }
@@ -136,12 +190,25 @@ class WereadKeeper:
                     raise
                 except Exception as exc:               # 守护任务不能被任何异常带走
                     logger.error("[WeReadKeeper] 检查异常: %s", exc)
-                await asyncio.sleep(keepalive_interval())
+                await asyncio.sleep(_next_delay())
         except asyncio.CancelledError:
             raise
 
-    async def check_once(self) -> Dict:
-        """查一次登录态，坏了就续。返回本次的状态摘要。"""
+    async def check_once(self, force: bool = False) -> Dict:
+        """查一次登录态，坏了就续。返回本次的状态摘要。
+
+        `force=False`（后台轮到的那次）时，如果最近有真实请求成功过就直接跳过 ——
+        采集本身已经证明登录态是活的，没必要再打一次接口。
+        手动触发（force=True）不跳，用户点了就得真查。
+        """
+        if not force and _recently_proven_alive():
+            self._skipped += 1
+            self._last_check_ok = True
+            self._failures = 0
+            self._message = "最近的采集请求刚验证过登录态，本轮跳过"
+            logger.debug("[WeReadKeeper] 登录态刚被真实流量验证过，跳过本轮探活")
+            return self.status()
+
         self._last_check_at = time.time()
 
         if not weread_client.is_enabled():

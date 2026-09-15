@@ -107,11 +107,14 @@ async def weread_status():
 async def weread_keepalive_check():
     """不等下一轮，马上查一次登录态；坏了就当场续期。
 
+    手动触发一定会真的打一次接口（后台那轮在采集刚验证过登录态时会跳过，
+    这里不跳 —— 用户点了就得给个真实结果）。
+
     返回的就是 `/api/weread/status` 里那个 `keepalive` 结构。
     """
     from utils.weread_keeper import weread_keeper
 
-    data = await weread_keeper.check_once()
+    data = await weread_keeper.check_once(force=True)
     return WereadResponse(success=bool(data.get("last_check_ok")),
                           data=data,
                           error=None if data.get("last_check_ok") else data.get("message"))

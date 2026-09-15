@@ -477,6 +477,21 @@ async def _throttle(interval: float):
 _renew_lock = asyncio.Lock()
 _last_renew_at = 0.0
 _last_renew_ok = False
+
+# 最近一次请求成功的时刻。守护任务靠它判断「登录态刚被真实流量验证过」，
+# 从而跳过自己那一次探活 —— 采集本身就在证明登录态是活的，
+# 再额外打一次接口纯属给微信读书添无谓的请求。
+_last_success_at = 0.0
+
+
+def last_success_at() -> float:
+    """最近一次微信读书请求成功的 epoch 秒；0 表示本次启动以来还没成功过。"""
+    return _last_success_at
+
+
+def _mark_success() -> None:
+    global _last_success_at
+    _last_success_at = time.time()
 RENEW_COOLDOWN = 30.0
 
 
@@ -935,10 +950,12 @@ class WereadClient:
         用户不必重新扫码或重贴 Cookie。
         """
         try:
-            return await self._request_once(
+            payload = await self._request_once(
                 method, path, params=params, json_data=json_data,
                 as_json=as_json, interval=interval, app=app,
             )
+            _mark_success()
+            return payload
         except WereadError as exc:
             if not (self._allow_renew and exc.is_auth_error
                     and exc.code in AUTH_ERROR_CODES and auto_renew()):
@@ -946,10 +963,12 @@ class WereadClient:
             if not await self._try_renew():
                 raise
             logger.info("[WeRead] wr_skey 已续期，重试 %s", path)
-            return await self._request_once(
+            payload = await self._request_once(
                 method, path, params=params, json_data=json_data,
                 as_json=as_json, interval=interval, app=app,
             )
+            _mark_success()
+            return payload
 
     async def _request_once(self, method: str, path: str, *, params: Optional[Dict] = None,
                             json_data: Optional[Dict] = None, as_json: bool = True,
