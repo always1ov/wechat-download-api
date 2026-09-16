@@ -125,14 +125,22 @@ def test_parse_mp_articles_skips_entries_without_review_id():
 
 
 @pytest.mark.parametrize("code", [-2010, -2012, -2041])
-def test_parse_mp_articles_flags_auth_errors_as_non_retriable(code):
+def test_parse_mp_articles_flags_auth_errors_as_non_retriable(code, monkeypatch, tmp_path):
+    # 文案取决于当前 Cookie 有没有 wr_rt，必须把状态钉死，
+    # 否则会被别的用例留下的登录态影响
+    monkeypatch.setattr(wc.weread_auth, "credentials_file", tmp_path / ".weread.json")
+    monkeypatch.setenv("WEREAD_COOKIE", "wr_vid=1; wr_skey=k")      # 故意没有 wr_rt
+    wc.weread_auth._runtime_cookie = ""
+
     with pytest.raises(WereadError) as exc:
         wc.parse_mp_articles({"errCode": code, "errMsg": "blocked"}, "MP_WXS_1")
     assert exc.value.code == code
     assert exc.value.retriable is False
     assert exc.value.is_auth_error
-    # 这个用例没配 Cookie，也就没有 wr_rt —— 提示要说清「续不了，得重新扫码」
+    # 没有 wr_rt —— 提示要说清「续不了，得重新扫码」
     assert exc.value.user_message == wc.COOKIE_NO_REFRESH_MSG
+
+    wc.weread_auth._runtime_cookie = ""
 
 
 def test_parse_mp_articles_other_errors_stay_retriable():

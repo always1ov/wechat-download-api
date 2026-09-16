@@ -230,7 +230,11 @@
         try {
             var res = await fetch('/api/weread/renew', { method: 'POST' });
             var data = await res.json();
-            setState(data.success ? '续期成功，wr_skey 已更新' : (data.error || '续期失败'),
+            var d = data.data || {};
+            setState(data.success
+                        ? (d.renewed === false ? (d.message || '当前登录态有效，无需续期')
+                                               : '续期成功，wr_skey 已更新')
+                        : (data.error || '续期失败'),
                      data.success ? 'ok' : 'bad');
         } catch (e) {
             setState('请求失败: ' + e.message, 'bad');

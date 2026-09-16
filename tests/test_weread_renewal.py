@@ -273,3 +273,48 @@ async def test_non_auth_errors_do_not_trigger_renewal(monkeypatch):
     with pytest.raises(WereadError):
         wc.parse_mp_articles(payload, BOOK_ID)
     assert calls == []
+
+
+# ── 续期失败要说清原因，登录态没坏时别乱报错 ──────────────────
+
+async def test_renewal_surfaces_weread_error_code(monkeypatch):
+    """wr_rt 也过期时，微信读书把原因写在 body 的 errcode 里。
+
+    以前这个码被吞掉，用户只看到「续期接口未下发新 wr_skey (HTTP 200)」，
+    完全不知道该重新扫码。
+    """
+    def handler(request):
+        if request.url.path == "/web/login/renewal":
+            return httpx.Response(200, json={"errcode": -2012, "errmsg": "token expired"})
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(
+        WereadClient, "_new_client",
+        lambda self: httpx.AsyncClient(transport=httpx.MockTransport(handler),
+                                       follow_redirects=True),
+    )
+
+    with pytest.raises(WereadError) as exc:
+        await wc.renew_cookie_value(
+            LIVE_COOKIE,
+            client_factory=lambda: httpx.AsyncClient(
+                transport=httpx.MockTransport(handler), follow_redirects=True),
+        )
+
+    assert exc.value.code == -2012
+    assert exc.value.is_auth_error
+
+
+async def test_renewal_without_error_code_tells_user_to_rescan(monkeypatch):
+    """没有 errcode 可报时，兜底提示也得给出下一步动作。"""
+    def handler(request):
+        return httpx.Response(200, json={})
+
+    with pytest.raises(WereadError) as exc:
+        await wc.renew_cookie_value(
+            LIVE_COOKIE,
+            client_factory=lambda: httpx.AsyncClient(
+                transport=httpx.MockTransport(handler), follow_redirects=True),
+        )
+
+    assert "重新扫码" in exc.value.message

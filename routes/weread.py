@@ -219,7 +219,19 @@ async def renew_weread_cookie():
         return WereadResponse(success=False, error=weread_client.COOKIE_MISSING_MSG)
     try:
         async with WereadClient() as client:
-            await client.renew_cookie()
+            try:
+                await client.renew_cookie()
+            except WereadError as exc:
+                # 登录态本来就是好的时候，微信读书可能不下发新 skey —— 这不算故障。
+                # 以前一律报错，用户点一下「手动续期」就看到一句吓人的红字，
+                # 实际上什么问题都没有。
+                valid, message = await client.verify()
+                if valid:
+                    info = weread_auth.get_info()
+                    info.update({"valid": True, "renewed": False,
+                                 "message": "当前登录态有效，微信读书未下发新 wr_skey，无需续期"})
+                    return WereadResponse(success=True, data=info)
+                raise exc
             valid, message = await client.verify()
     except WereadError as e:
         return WereadResponse(success=False, error=e.user_message)
@@ -227,7 +239,7 @@ async def renew_weread_cookie():
         return WereadResponse(success=False, error=f"续期失败: {e}")
 
     info = weread_auth.get_info()
-    info.update({"valid": valid, "message": message})
+    info.update({"valid": valid, "renewed": True, "message": message})
     return WereadResponse(success=valid, data=info, error=None if valid else message)
 
 

@@ -880,6 +880,7 @@ async def renew_cookie_value(cookie: str, timeout: float = 30.0,
                 new_skey = value
 
     # 兜底：有的响应不走 Set-Cookie，把新 skey 直接放在 JSON body 里
+    data = None
     if not new_skey:
         try:
             data = resp.json()
@@ -894,8 +895,15 @@ async def renew_cookie_value(cookie: str, timeout: float = 30.0,
                     break
 
     if not new_skey:
+        # 续期失败时微信读书通常把原因写在 body 的 errcode 里（比如 wr_rt 也过期了
+        # 会回 -2012）。以前直接吞掉，用户只看到一句「未下发新 wr_skey (HTTP 200)」，
+        # 完全不知道该重新扫码还是该等一等 —— 先把真实错误码抛出来。
+        if isinstance(data, dict):
+            raise_for_payload(data)
         raise WereadError(
-            "renew_failed", f"续期接口未下发新 wr_skey (HTTP {resp.status_code})"
+            "renew_failed",
+            f"续期接口未下发新 wr_skey (HTTP {resp.status_code})，"
+            f"多半是 wr_rt 也失效了，请打开 /login.html 重新扫码"
         )
 
     logger.info("[WeRead] wr_skey 续期成功 (len=%d)", len(new_skey))

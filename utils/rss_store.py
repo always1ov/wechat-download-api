@@ -229,6 +229,15 @@ def save_articles(fakeid: str, articles: List[Dict], source: str = "poll") -> in
     conn = _get_conn()
     inserted = 0
     try:
+        # 先把已有的 link 查出来，用来准确区分「新增」和「回填旧文章」。
+        # 不能靠 cursor.rowcount：ON CONFLICT DO UPDATE 命中时它同样是 1，
+        # 于是补了正文的旧文章会被算成新增 —— 轮询日志和「获取历史文章」的
+        # 「新增 N 篇」都会虚高，用户看到的数字是假的。
+        existing_links = {
+            row["link"] for row in conn.execute(
+                "SELECT link FROM articles WHERE fakeid=?", (fakeid,)
+            )
+        }
         for a in articles:
             content = a.get("content", "")
             plain_content = a.get("plain_content", "")
@@ -260,8 +269,10 @@ def save_articles(fakeid: str, articles: List[Dict], source: str = "poll") -> in
                         source,
                     ),
                 )
-                if cursor.rowcount > 0:
+                link = a.get("link", "")
+                if cursor.rowcount > 0 and link not in existing_links:
                     inserted += 1
+                    existing_links.add(link)
             except sqlite3.IntegrityError:
                 pass
         conn.commit()
