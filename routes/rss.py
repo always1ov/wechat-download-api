@@ -41,16 +41,10 @@ def get_base_url(request: Request) -> str:
     获取服务的基础 URL，优先使用环境变量 SITE_URL，
     支持反向代理（检测 X-Forwarded-Proto 和 X-Forwarded-Host）
     """
-    # 优先使用配置的 SITE_URL
-    site_url = os.getenv("SITE_URL", "").strip()
-    if site_url:
-        return site_url.rstrip("/")
-    
-    # 检测反向代理头部
-    proto = request.headers.get("X-Forwarded-Proto", "http")
-    host = request.headers.get("X-Forwarded-Host") or request.headers.get("Host", "localhost:5000")
-    
-    return f"{proto}://{host}"
+    # SITE_URL 会被拼进每条 RSS 的图片地址，配错（比如原样粘了中文占位符）
+    # 会让阅读器打不开图、甚至崩溃，所以统一走带校验的入口，不合格就回退 Host
+    from utils import site_url
+    return site_url.base_url(request)
 
 router = APIRouter()
 

@@ -75,9 +75,14 @@ def proxy_image_url(url: str, base_url: str) -> str:
     if not url:
         return ""
     
-    # 防止重复代理：如果 URL 已经是代理 URL，直接返回
-    if "/api/image?url=" in url:
-        return url
+    # 已经是代理 URL：不重复包一层，但要把主机换成当前这次请求用的地址。
+    # 正文里存的是**采集那一刻**拼出来的绝对地址，可能是 localhost（没配
+    # SITE_URL 时的回退）、也可能是换 IP/域名之前的旧地址 —— 原样发出去的话，
+    # 读者在别的设备上打开就会指向他自己的机器，图全挂。
+    marker = "/api/image?url="
+    if marker in url:
+        target = url.split(marker, 1)[1]
+        return f"{base_url.rstrip('/')}{marker}{target}"
     
     # 只代理微信 CDN 的图片
     if "mmbiz.qpic.cn" in url or "mmbiz.qlogo.cn" in url or "wx.qlogo.cn" in url:

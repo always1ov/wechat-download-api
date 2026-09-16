@@ -90,7 +90,7 @@ docker build -t wechat-download-api:local .
 docker run -d \
   -p 5000:5000 \
   -v $(pwd)/data:/app/data \
-  -e SITE_URL=http://你的IP:5000 \
+  -e SITE_URL=http://192.168.1.10:5000 \
   -e TZ=Asia/Shanghai \
   --name wechat-api \
   wechat-download-api:local
@@ -557,7 +557,7 @@ cp env.example .env
 ```bash
 ENABLE_MCP=1
 MCP_TOKEN=设一个足够长的随机串           # 客户端凭它鉴权（必填，留空则不启用）
-# MCP_RESOURCE_URL=https://你的域名/mcp  # 部署到公网域名时设（DNS-rebinding 白名单）
+# MCP_RESOURCE_URL=https://rss.example.net/mcp  # 部署到公网域名时设（DNS-rebinding 白名单）
 ```
 
 服务挂载在 `/mcp`（streamable-http）。
@@ -566,7 +566,7 @@ MCP_TOKEN=设一个足够长的随机串           # 客户端凭它鉴权（必
 
 ```bash
 # Claude Code
-claude mcp add --transport http wechatrss https://你的域名/mcp \
+claude mcp add --transport http wechatrss https://rss.example.net/mcp \
   --header "Authorization: Bearer <MCP_TOKEN>"
 ```
 
@@ -575,7 +575,7 @@ claude mcp add --transport http wechatrss https://你的域名/mcp \
 {
   "mcpServers": {
     "wechatrss": {
-      "url": "https://你的域名/mcp",
+      "url": "https://rss.example.net/mcp",
       "headers": { "Authorization": "Bearer <MCP_TOKEN>" }
     }
   }
@@ -892,7 +892,7 @@ cp env.example .env
 > **⚠️ 重要**: `SITE_URL` 必须配置为实际访问地址（IP或域名），否则RSS图片无法正常显示。例如：
 > - 本地开发: `http://localhost:5000`
 > - 局域网部署: `http://192.168.1.100:5000`
-> - 公网域名: `https://你的域名.com`
+> - 公网域名: `https://rss.example.net`
 
 ## 项目结构
 

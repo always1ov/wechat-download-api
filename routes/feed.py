@@ -30,8 +30,8 @@ router = APIRouter()
 
 def _base_url(request: Request) -> str:
     """优先用 SITE_URL，否则回退请求 base_url（用于图片代理）。"""
-    site = os.getenv("SITE_URL", "").strip().rstrip("/")
-    return site or str(request.base_url).rstrip("/")
+    from utils import site_url
+    return site_url.configured() or str(request.base_url).rstrip("/")
 
 
 @router.get("/feed/articles.json", summary="本地已抓取文章列表（含 id，增量同步）")

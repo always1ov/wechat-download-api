@@ -32,13 +32,8 @@ router = APIRouter()
 
 def get_base_url(request: Request) -> str:
     """服务的基础 URL，用于把封面拼成绝对地址（同 routes/search.py 的实现）。"""
-    site_url = os.getenv("SITE_URL", "").strip()
-    if site_url:
-        return site_url.rstrip("/")
-    proto = request.headers.get("X-Forwarded-Proto", "http")
-    host = (request.headers.get("X-Forwarded-Host")
-            or request.headers.get("Host", "localhost:5000"))
-    return f"{proto}://{host}"
+    from utils import site_url as _site_url
+    return _site_url.base_url(request)
 
 
 class WereadResponse(BaseModel):

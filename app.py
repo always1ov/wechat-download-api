@@ -77,6 +77,22 @@ async def lifespan(app: FastAPI):
         print("Visit: http://localhost:5000/admin.html")
         print("=" * 60 + "\n")
 
+    # SITE_URL 配错会被写进每条 RSS 的图片地址 —— 图打不开，个别阅读器还会崩，
+    # 而且从服务端看一切正常，排查起来很痛苦。启动时就把它喊出来。
+    from utils import site_url as _site_url
+    _su = _site_url.describe()
+    if _su["value"] and not _su["valid"]:
+        print("\n" + "=" * 60)
+        print(f"[WARNING] SITE_URL 配置有问题：{_su['reason']}")
+        print(f"          当前值：{_su['value']}")
+        print("          已忽略它，改用请求里的 Host。")
+        print("          RSS 图片地址用它拼，建议改成实际访问地址，例如：")
+        print("            SITE_URL=http://192.168.1.10:5000")
+        print("            SITE_URL=https://rss.mydomain.com")
+        print("=" * 60 + "\n")
+    elif not _su["value"]:
+        logger.info("未配置 SITE_URL，RSS 地址将按请求的 Host 生成")
+
     init_db()
 
     # 历史遗留：风控验证页曾被当正文存进库，且因为 content 非空再也不会被回填。

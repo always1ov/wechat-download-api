@@ -120,7 +120,8 @@ class RSSPoller:
             logger.info("待补正文 %d 篇超过限制，本轮只抓最近 %d 篇",
                         len(pending), MAX_CONTENT_PER_ROUND)
 
-        site_url = os.getenv("SITE_URL", "http://localhost:5000").rstrip("/")
+        from utils import site_url as _site_url
+        site_url = _site_url.base_url()
         filled = 0
         for article in targets:
             review_id = article.get("review_id") or weread_client.review_id_from_article_url(

@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 def _base_url() -> str:
-    return os.getenv("SITE_URL", "").rstrip("/")
+    from utils import site_url
+    return site_url.configured()
 
 
 class StoreAdapter:
