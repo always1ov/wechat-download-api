@@ -8,19 +8,32 @@
 图片 URL 处理工具
 统一处理微信 CDN HTTP 图片转 HTTPS 代理
 """
+import os
 import re
 from urllib.parse import quote, unquote
 
 
-def to_direct_wechat_images(html: str) -> str:
+def direct_images_enabled() -> bool:
+    """RSS 正文里的图要不要还原成微信直链。默认否。
+
+    直链的代价是：每个订阅者、每次刷新、每台设备都直接打微信 CDN，
+    请求量成倍放大（正是最容易惹风控的部分），而且一旦读者访问不到微信
+    （断网、内网、境外网络不通），整篇文章的图全挂 —— 这跟「RSS 要能离线
+    看完整图文」是相反的。
+
+    默认走自家代理：图只向微信要一次，之后落在本地缓存里，读者永远不碰微信。
+    想回到旧行为设 RSS_DIRECT_IMAGES=true。
     """
-    [2026-07-20] 读路径图片加速：把正文图片改成「直连 mmbiz + referrerpolicy=no-referrer」。
+    raw = (os.getenv("RSS_DIRECT_IMAGES", "") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
-    存储的正文里图片是 `<host>/api/image?url=<编码原图>` 代理 URL（content_processor 处理过），
-    阅读器走代理跨境拉图很慢。此函数把代理 URL 还原成直连 mmbiz、并给每个 <img> 补
-    referrerpolicy="no-referrer"——浏览器不发 referer，微信防盗链放行，直连 CDN 最快。
 
-    幂等：已直连的原样、只补 referrerpolicy；代理的先还原再补。存量内容无需迁移 DB。
+def to_direct_wechat_images(html: str) -> str:
+    """把正文图片改成「直连 mmbiz + referrerpolicy=no-referrer」。
+
+    仅在 RSS_DIRECT_IMAGES=true 时使用 —— 默认行为见 direct_images_enabled()。
+
+    幂等：已直连的原样、只补 referrerpolicy；代理的先还原再补。
     """
     if not html:
         return html

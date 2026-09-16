@@ -19,6 +19,7 @@ import logging
 import os
 from typing import Dict, List
 
+from utils import image_cache
 from utils import rss_store
 from utils import weread_client
 from utils.weread_client import WereadClient, WereadError
@@ -133,6 +134,17 @@ class RSSPoller:
             article["content"] = result.get("content", "")
             article["plain_content"] = result.get("plain_content", "")
             filled += 1
+
+            # 顺手把正文里的图也抓进本地缓存：读者打开 RSS 时图已经在本地，
+            # 不必临时去打微信 —— 也就不会出现「N 个订阅者 × 每次刷新」的放大。
+            if image_cache.prefetch_enabled():
+                try:
+                    await image_cache.prefetch(
+                        image_cache.extract_wechat_images(article["content"]),
+                        interval=weread_client.content_interval() / 4,
+                    )
+                except Exception as exc:
+                    logger.debug("图片预热失败（不影响正文）: %s", exc)
 
         if filled:
             logger.info("[WeRead] 补齐 %d 篇正文", filled)

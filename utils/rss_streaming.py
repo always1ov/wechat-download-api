@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from html import escape as html_escape
 from typing import Iterator
 
-from utils.image_proxy import proxy_image_url, to_direct_wechat_images
+from utils.image_proxy import (direct_images_enabled, proxy_content_images,
+                               proxy_image_url, to_direct_wechat_images)
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +47,14 @@ def _build_item_xml(article: dict, base_url: str) -> str:
     author_escaped = html_escape(author) if author else ""
     title_escaped = html_escape(title)
     
-    # [2026-07-20] 正文图片直连 mmbiz + no-referrer，避免阅读器走代理跨境拉图慢
-    content_html = to_direct_wechat_images(article.get("content", ""))
+    # 正文图片默认走自家代理（带本地缓存）：图只向微信要一次，读者拿到的是
+    # 本地副本，断网/内网也能看图，微信那边也不会被 N 个订阅者反复拉。
+    # 设 RSS_DIRECT_IMAGES=true 可回到「还原成微信直链」的旧行为。
+    raw_content = article.get("content", "")
+    if direct_images_enabled():
+        content_html = to_direct_wechat_images(raw_content)
+    else:
+        content_html = proxy_content_images(raw_content, base_url)
     html_parts = []
     
     if content_html:

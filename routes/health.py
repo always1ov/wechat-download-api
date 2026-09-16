@@ -36,7 +36,7 @@ async def health_check():
     `build` 是镜像的构建标记（commit sha / 分支 / 时间），
     用来确认当前跑的是哪一版代码。
     """
-    from utils import weread_client
+    from utils import image_cache, weread_client
 
     return {
         "status": "healthy",
@@ -48,4 +48,5 @@ async def health_check():
             "configured": weread_client.weread_auth.is_configured(),
             "app_api": weread_client.app_domain_usable(),
         },
+        "image_cache": image_cache.stats(),
     }

@@ -143,15 +143,23 @@ async def _fetch_datauri(client: httpx.AsyncClient, url: str, max_side: int, jpe
         return du
     raw = _raw_cache_get(url)  # 跨尺寸共享：命中则跳过最贵的跨境抓取，只需重压
     if raw is None:
-        async with _img_sem():  # 全局限并发，多导出共享
-            try:
-                r = await client.get(url, headers={"Referer": "https://mp.weixin.qq.com/"},
-                                     timeout=12.0, follow_redirects=True)
-                if r.status_code != 200 or not r.content:
+        # 进程内缓存重启就没了，落盘缓存才是真省 —— 而且它和 /api/image 代理、
+        # 轮询预热共用同一份，同一张图整个系统只向微信要一次。
+        from utils import image_cache
+        cached = image_cache.get(url)
+        if cached:
+            raw = cached[0]
+        else:
+            async with _img_sem():  # 全局限并发，多导出共享
+                try:
+                    r = await client.get(url, headers={"Referer": "https://mp.weixin.qq.com/"},
+                                         timeout=12.0, follow_redirects=True)
+                    if r.status_code != 200 or not r.content:
+                        return None
+                    raw = r.content
+                except Exception:
                     return None
-                raw = r.content
-            except Exception:
-                return None
+            image_cache.put(url, raw, "image/jpeg")
         _raw_cache_put(url, raw)
     # 压缩放线程池，避免大图阻塞事件循环
     du = await asyncio.to_thread(_compress_to_datauri, raw, max_side, jpeg_q)

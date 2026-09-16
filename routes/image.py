@@ -14,10 +14,12 @@
 """
 
 from fastapi import APIRouter, Query, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from urllib.parse import urlparse
 import httpx
 import logging
+
+from utils import image_cache
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,21 @@ async def proxy_image(url: str = Query(..., description="图片URL")):
     if parsed.hostname not in ALLOWED_IMAGE_HOSTS:
         raise HTTPException(status_code=403, detail="仅允许代理微信CDN图片")
 
+    # 命中本地缓存就别再去麻烦微信了。RSS 阅读器每刷新一次、每多一个订阅者
+    # 都会重新拉图，这些重复请求正是最容易把风控惹毛的部分。
+    cached = image_cache.get(url)
+    if cached:
+        blob, content_type = cached
+        return Response(
+            content=blob,
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f"inline; filename={url.split('/')[-1]}",
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "X-Image-Cache": "HIT",
+            },
+        )
+
     # 打开 stream 拿 headers 做预检，client 和 response 生命周期托管到 generator
     client = httpx.AsyncClient(timeout=30.0)
     try:
@@ -86,24 +103,35 @@ async def proxy_image(url: str = Query(..., description="图片URL")):
 
     async def iter_chunks():
         total = 0
+        # 边转发边攒一份，完整拿到才写缓存 —— 截断或出错的半截图不能进缓存
+        buf = bytearray()
+        complete = True
         try:
             async for chunk in response.aiter_bytes(STREAM_CHUNK):
                 total += len(chunk)
                 if total > MAX_IMAGE_BYTES:
                     logger.warning("Image %s exceeded MAX_IMAGE_BYTES, truncated", url[:80])
+                    complete = False
                     break
+                buf.extend(chunk)
                 yield chunk
+        except Exception:
+            complete = False
+            raise
         finally:
             try:
                 await response.aclose()
             finally:
                 await client.aclose()
+            if complete and buf:
+                image_cache.put(url, bytes(buf), content_type)
 
     return StreamingResponse(
         iter_chunks(),
         media_type=content_type,
         headers={
             "Content-Disposition": f"inline; filename={url.split('/')[-1]}",
-            "Cache-Control": "public, max-age=86400",
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Image-Cache": "MISS",
         },
     )
