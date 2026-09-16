@@ -124,6 +124,11 @@ class RSSPoller:
                 if e.is_auth_error:
                     # 登录态失效，本轮剩下的也不用试了
                     break
+                if e.code == "intercepted":
+                    # 撞上风控验证页：这一轮再抓也是同样的拦截页，继续只会加重风控。
+                    # 停手，等下一轮（届时正文仍为空，会自动重试）。
+                    logger.warning("[WeRead] 触发微信风控验证页，本轮停止补正文")
+                    break
                 continue
             article["content"] = result.get("content", "")
             article["plain_content"] = result.get("plain_content", "")

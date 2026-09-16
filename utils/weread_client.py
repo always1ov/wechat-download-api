@@ -797,6 +797,31 @@ def parse_shelf_book_ids(payload) -> Optional[List[str]]:
     return None
 
 
+# 微信风控/中间页的特征串。命中任意一条就说明拿到的不是正文，
+# 而是「环境异常，完成验证后即可继续访问」这类拦截页 —— 一旦当正文存进库，
+# 订阅者在 RSS 阅读器里看到的就是这段话，而且因为 content 非空，
+# 以后的轮询也不会再回填，等于这篇文章永久坏掉。
+INTERCEPT_SIGNATURES = (
+    "当前环境异常",
+    "完成验证后即可继续访问",
+    "环境异常，完成验证",
+    "请在微信客户端打开链接",
+    "请在微信客户端打开此链接",
+)
+
+
+def looks_like_interception(text: str) -> str:
+    """命中风控/中间页返回命中的特征串，否则返回空串。"""
+    body = str(text or "")
+    if len(body) > 4000:
+        # 拦截页都很短；正文很长时没必要全串扫，取头部即可
+        body = body[:4000]
+    for sign in INTERCEPT_SIGNATURES:
+        if sign in body:
+            return sign
+    return ""
+
+
 def process_content_html(html: str, proxy_base_url: Optional[str] = None,
                          review_id: str = "") -> Dict:
     """把 /web/mp/content 的响应解析成 content / plain_content / images。
@@ -818,6 +843,16 @@ def process_content_html(html: str, proxy_base_url: Optional[str] = None,
     if not result.get("content"):
         raise WereadError(
             "empty_content", f"未能从响应中解析出正文: {review_id or '(unknown)'}"
+        )
+
+    # 风控拦截页也是「非空正文」，光判空拦不住 —— 必须按内容认出来并拒绝，
+    # 宁可这篇暂时没正文（RSS 会回落到摘要+原文链接），也不能把
+    # 「环境异常，完成验证后即可继续访问」当文章推给订阅者
+    hit = looks_like_interception(result.get("plain_content") or result.get("content"))
+    if hit:
+        raise WereadError(
+            "intercepted",
+            f"取到的是微信风控验证页而不是正文（命中「{hit}」）: {review_id or '(unknown)'}",
         )
     return result
 

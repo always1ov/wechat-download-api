@@ -78,6 +78,17 @@ async def lifespan(app: FastAPI):
         print("=" * 60 + "\n")
 
     init_db()
+
+    # 历史遗留：风控验证页曾被当正文存进库，且因为 content 非空再也不会被回填。
+    # 启动时清空这些正文，下一轮轮询会重新抓一次真正的内容。
+    try:
+        from utils.rss_store import clear_intercepted_content
+        cleaned = clear_intercepted_content()
+        if cleaned:
+            logger.warning("清理了 %d 篇存成风控验证页的正文，下一轮轮询会重新抓", cleaned)
+    except Exception as exc:
+        logger.warning("清理风控验证页正文失败（不影响启动）: %s", exc)
+
     _skip_bg = os.getenv("SKIP_BACKGROUND_TASKS", "").lower() in ("1", "true", "yes")
     if not _skip_bg:
         await rss_poller.start()

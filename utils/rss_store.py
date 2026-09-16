@@ -857,3 +857,28 @@ def get_articles_by_category(category_id: int, limit: int = 50) -> List[Dict]:
         conn.close()
 
 
+
+
+def clear_intercepted_content() -> int:
+    """把「存成了微信风控验证页」的正文清空，让轮询器下一轮重新抓。
+
+    拦截页是非空正文，而 save_articles 只在 content='' 时才回填 ——
+    所以一旦存进去就再也不会被覆盖，这篇文章会永久显示
+    「环境异常，完成验证后即可继续访问」。启动时清一次，给它们自愈的机会。
+
+    返回清理的条数。
+    """
+    from utils.weread_client import INTERCEPT_SIGNATURES
+
+    conn = _get_conn()
+    try:
+        where = " OR ".join(["content LIKE ?"] * len(INTERCEPT_SIGNATURES))
+        params = [f"%{sign}%" for sign in INTERCEPT_SIGNATURES]
+        cur = conn.execute(
+            f"UPDATE articles SET content='', plain_content='' WHERE {where}",
+            params,
+        )
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
