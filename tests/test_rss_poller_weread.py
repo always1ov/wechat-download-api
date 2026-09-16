@@ -52,7 +52,8 @@ def install(monkeypatch, *, articles=("tok1",), content="", list_error=None,
                     "mpInfo": {"title": t, "time": 1778580000, "originalId": t},
                 }}]} for t in articles
             ]}
-        if path == "/web/mp/content":
+        # 正文有主备两条路径，撞风控时会依次试 —— 两条都按同样规则响应
+        if path in ("/web/mp/content", "/api/mp/content"):
             if content_error:
                 raise WereadError(-1, "content boom")
             return content or '<div id="js_content"><p>正文</p></div>'

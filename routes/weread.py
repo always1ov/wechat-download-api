@@ -500,17 +500,45 @@ async def weread_diagnose(
         except Exception as e:
             rec("最新一篇兜底 (/api/mp/cover)", False, err_detail(e))
 
-        # ── 8. 正文 ──
+        # ── 8. 正文：两条路径都单独探一遍原始响应 ──
+        # 「打不开文章」最难查的就是这一步：解析失败和被风控挡住，
+        # 从结果上看都是「没正文」。所以这里不只报成败，还把微信读书
+        # 实际回了什么（状态、长度、有没有正文标记、是不是验证页）摊出来。
         if review_id:
+            for path in weread_client.WereadClient.CONTENT_PATHS:
+                try:
+                    raw = await client._request(
+                        "GET", path, params={"reviewId": review_id},
+                        as_json=False, interval=0.0,
+                    ) or ""
+                    hit = weread_client.looks_like_interception(raw)
+                    markers = [m for m in ("js_content", "rich_media_content",
+                                           "contentNoEncode", "msg_title")
+                               if m in raw]
+                    if hit:
+                        rec(f"正文原始响应 ({path})", False,
+                            f"{len(raw)} 字符，命中风控特征「{hit}」；"
+                            f"片段: {raw[:160]}",
+                            "微信读书把微信的验证页透出来了 —— 降低采集频率"
+                            "（调大 WEREAD_CONTENT_INTERVAL）、或过一阵再试")
+                    else:
+                        rec(f"正文原始响应 ({path})", bool(markers),
+                            f"{len(raw)} 字符，正文标记={markers or '无'}；"
+                            f"片段: {raw[:160]}",
+                            "" if markers else "响应里没有任何正文标记，"
+                                               "把这段片段发出来便于定位")
+                except Exception as e:
+                    rec(f"正文原始响应 ({path})", False, err_detail(e))
+
             try:
                 result = await client.fetch_article_content(review_id)
-                rec("取正文 (/web/mp/content)", True,
+                rec("解析正文", True,
                     f"{len(result.get('content', ''))} 字符, "
                     f"{len(result.get('images', []))} 张图")
             except Exception as e:
-                rec("取正文 (/web/mp/content)", False, err_detail(e))
+                rec("解析正文", False, err_detail(e))
         else:
-            rec("取正文 (/web/mp/content)", False,
+            rec("取正文", False,
                 "前面没拿到任何 reviewId，跳过", "先解决上面的列表问题")
 
     failed = [s["step"] for s in steps if not s["ok"]]

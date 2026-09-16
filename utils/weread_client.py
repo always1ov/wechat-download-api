@@ -1261,13 +1261,54 @@ class WereadClient:
             "GET", "/api/mp/cover", params={"bookId": book_id}, interval=page_interval()
         )
 
+    # 正文接口的备选路径。/web/mp/content 撞上风控验证页时再试一遍 ——
+    # 参考实现的探测脚本里 /api/mp/content 是同样能出正文的另一个入口。
+    CONTENT_PATHS = ("/web/mp/content", "/api/mp/content")
+
     async def get_content_html(self, review_id: str) -> str:
-        return await self._request(
-            "GET", "/web/mp/content",
-            params={"reviewId": review_id},
-            as_json=False,
-            interval=content_interval(),
-        )
+        """取正文 HTML。主路径被风控挡住时，换备选路径再试一次。
+
+        微信读书偶尔会把微信的「环境异常，完成验证后即可继续访问」原样透出来。
+        这种拦截常常是按路径/按次触发的，换一条路往往就过去了，
+        比直接放弃、让这篇文章一直没正文要强。
+        """
+        last_html = ""
+        last_error: Optional[WereadError] = None
+        for index, path in enumerate(self.CONTENT_PATHS):
+            try:
+                html = await self._request(
+                    "GET", path,
+                    params={"reviewId": review_id},
+                    as_json=False,
+                    # 第一条路已经等过间隔了，备选立刻试，别把单篇拖成两倍时长
+                    interval=content_interval() if index == 0 else 0.0,
+                )
+            except WereadError as exc:
+                last_error = exc
+                if exc.is_auth_error:
+                    raise            # 登录态问题换路径也没用
+                continue
+            html = html or ""
+            # as_json=False 拿到的是纯文本，所以接口回 JSON 错误体（比如登录态
+            # 失效的 -2012）时不会被 _request 识别出来，会一路当成 HTML，
+            # 最后报成「解析不出正文」—— 真实原因被掩盖了。这里补上判断。
+            stripped = html.lstrip()
+            if stripped.startswith("{"):
+                try:
+                    payload = json.loads(stripped)
+                except ValueError:
+                    payload = None
+                if isinstance(payload, dict):
+                    raise_for_payload(payload)     # 有 errcode 就按真实原因抛
+            if not looks_like_interception(html):
+                return html
+            last_html = html
+            logger.info("[WeRead] %s 撞上风控验证页，换下一条正文路径", path)
+
+        if last_error is not None and not last_html:
+            raise last_error
+        # 两条路都是验证页：交给上层按 intercepted 处理（不入库、下轮重试）
+        return last_html
 
     async def list_articles(self, fakeid: str, limit: int = 10, offset: int = 0,
                             nickname: str = "") -> List[Dict]:
