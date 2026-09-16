@@ -882,3 +882,33 @@ def clear_intercepted_content() -> int:
         return cur.rowcount or 0
     finally:
         conn.close()
+
+
+def links_with_content(fakeid: str, links: List[str]) -> set:
+    """这些 link 里，哪些在库里已经存了非空正文。
+
+    轮询器靠它跳过「已经落盘的文章」：列表接口每轮都会把最近 N 篇原样返回，
+    而解析出来的文章 dict 里本来就没有 content 字段，如果不查库，
+    每一轮都会把同样几篇正文重新抓一遍 —— 20 个号每小时就是 200 次重复请求，
+    内容一个字都没变，纯粹是送给风控的。
+    """
+    if not links:
+        return set()
+    conn = _get_conn()
+    try:
+        found = set()
+        # SQLite 有参数个数上限，分批查
+        for i in range(0, len(links), 400):
+            chunk = [l for l in links[i:i + 400] if l]
+            if not chunk:
+                continue
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT link FROM articles WHERE fakeid=? AND content!='' "
+                f"AND link IN ({placeholders})",
+                (fakeid, *chunk),
+            ).fetchall()
+            found.update(r["link"] for r in rows)
+        return found
+    finally:
+        conn.close()

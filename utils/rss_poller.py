@@ -103,10 +103,22 @@ class RSSPoller:
     async def _fill_content(self, client: WereadClient, fakeid: str,
                             articles: List[Dict]) -> int:
         """补正文。走微信读书正文接口，不碰 mp.weixin.qq.com，没有验证码风险。"""
-        targets = [a for a in articles if not a.get("content")][:MAX_CONTENT_PER_ROUND]
-        if len(articles) > MAX_CONTENT_PER_ROUND:
-            logger.info("文章数 %d 篇超过限制，本轮只补最近 %d 篇正文",
-                        len(articles), MAX_CONTENT_PER_ROUND)
+        # 列表接口每轮都把最近 N 篇原样返回，而解析出来的 dict 里根本没有 content
+        # 字段 —— 不查库的话「not a.get("content")」永远成立，等于每轮把同样几篇
+        # 正文重抓一遍。正文落盘之后就不该再问微信读书要了。
+        cached = rss_store.links_with_content(
+            fakeid, [a.get("link", "") for a in articles])
+        pending = [a for a in articles
+                   if not a.get("content") and a.get("link") not in cached]
+        targets = pending[:MAX_CONTENT_PER_ROUND]
+
+        skipped = len(articles) - len(pending)
+        if skipped:
+            logger.info("本轮 %d 篇，其中 %d 篇正文已落盘，跳过；需要抓 %d 篇",
+                        len(articles), skipped, len(pending))
+        if len(pending) > MAX_CONTENT_PER_ROUND:
+            logger.info("待补正文 %d 篇超过限制，本轮只抓最近 %d 篇",
+                        len(pending), MAX_CONTENT_PER_ROUND)
 
         site_url = os.getenv("SITE_URL", "http://localhost:5000").rstrip("/")
         filled = 0
